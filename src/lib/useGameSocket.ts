@@ -7,7 +7,7 @@
  * This means ws://localhost:3001 is never used from the browser.
  */
 "use client";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 
 export type WsMessage = Record<string, unknown> & { type: string };
 type Handler = (msg: WsMessage) => void;
@@ -22,7 +22,11 @@ function getWsBase(): string {
 export function useGameSocket(handlers: Record<string, Handler>) {
   const wsRef      = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;
@@ -33,6 +37,10 @@ export function useGameSocket(handlers: Record<string, Handler>) {
       ws = new WebSocket(`${getWsBase()}/ws/game`);
       wsRef.current = ws;
 
+      ws.onopen = () => {
+        setConnected(true);
+      };
+
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as WsMessage;
@@ -42,6 +50,7 @@ export function useGameSocket(handlers: Record<string, Handler>) {
       };
 
       ws.onclose = () => {
+        setConnected(false);
         if (alive) setTimeout(connect, 2000);
       };
     }
@@ -54,20 +63,26 @@ export function useGameSocket(handlers: Record<string, Handler>) {
     };
   }, []); // only once
 
-  const send = useCallback((msg: WsMessage) => {
+  const send = useCallback((msg: WsMessage): boolean => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }, []);
 
-  return { send };
+  return { send, connected };
 }
 
 export function useSignalingSocket(handlers: Record<string, Handler>) {
   const wsRef       = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;
@@ -78,6 +93,10 @@ export function useSignalingSocket(handlers: Record<string, Handler>) {
       ws = new WebSocket(`${getWsBase()}/ws/signaling`);
       wsRef.current = ws;
 
+      ws.onopen = () => {
+        setConnected(true);
+      };
+
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data as string) as WsMessage;
@@ -87,6 +106,7 @@ export function useSignalingSocket(handlers: Record<string, Handler>) {
       };
 
       ws.onclose = () => {
+        setConnected(false);
         if (alive) setTimeout(connect, 2000);
       };
     }
@@ -99,12 +119,14 @@ export function useSignalingSocket(handlers: Record<string, Handler>) {
     };
   }, []);
 
-  const send = useCallback((msg: WsMessage) => {
+  const send = useCallback((msg: WsMessage): boolean => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }, []);
 
-  return { send };
+  return { send, connected };
 }

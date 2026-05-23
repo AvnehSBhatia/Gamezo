@@ -17,9 +17,9 @@ const SITE_URL = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
   : undefined;
 
-const SITE_TITLE = "Eazo Developer Home";
+const SITE_TITLE = "Gamezo";
 const SITE_DESCRIPTION =
-  "Developer onboarding, secure session flow, and backend verification examples.";
+  "Race a stranger to vibe-code a tiny game, then let the crowd decide who wins.";
 
 export const metadata: Metadata = {
   ...(SITE_URL ? { metadataBase: new URL(SITE_URL) } : {}),
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   // metadata and overrides `openGraph.images` below at build time.
   openGraph: {
     type: "website",
-    siteName: "Eazo",
+    siteName: "Gamezo",
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
     url: "/",

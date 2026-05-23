@@ -1,9 +1,12 @@
 "use client";
+import { auth, memory } from "@eazo/sdk";
+import { useEazo } from "@eazo/sdk/react";
 import { ASSETS } from "@/lib/assets";
 import { useGameSocket } from "@/lib/useGameSocket";
 import { useWebcam } from "@/lib/useWebcam";
 import { useWebRTC } from "@/lib/useWebRTC";
 import { TOTAL_SECONDS, type ChatMsg } from "@/lib/game-data";
+import { buildGameWithAi, submitGameToRoom, type AiBuildResult } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -11,6 +14,15 @@ import { useEffect, useRef, useState } from "react";
 function getSession(key: string, fallback = "") {
   if (typeof window === "undefined") return fallback;
   return sessionStorage.getItem(key) ?? fallback;
+}
+
+function getOrCreateUserId(): string {
+  if (typeof window === "undefined") return "demo-user";
+  const existing = sessionStorage.getItem("gamezo_userId");
+  if (existing) return existing;
+  const id = `usr_${Math.random().toString(36).slice(2, 12)}`;
+  sessionStorage.setItem("gamezo_userId", id);
+  return id;
 }
 
 const PLACEHOLDER_PROMPTS = [
@@ -38,9 +50,14 @@ interface AiMsg {
 // ─── component ────────────────────────────────────────────────────────────────
 export default function GameScreen() {
   const router = useRouter();
+  const user = useEazo((s) => s.auth.user);
+  const authLoading = useEazo((s) => s.auth.loading);
 
-  const roomId   = useRef(getSession("gamezo_roomId"));
-  const userId   = useRef(getSession("gamezo_userId"));
+  const [roomId] = useState(() => getSession("gamezo_roomId", "demo-room"));
+  const [userId] = useState(() => getSession("gamezo_userId", getOrCreateUserId()));
+  const [placeholder] = useState(
+    () => PLACEHOLDER_PROMPTS[Math.floor(Math.random() * PLACEHOLDER_PROMPTS.length)],
+  );
 
   // Timer
   const [secondsLeft, setSecondsLeft] = useState(TOTAL_SECONDS);
@@ -75,10 +92,10 @@ export default function GameScreen() {
 
   // WebRTC — opponent's camera via peer connection
   const { attachPeerStream } = useWebRTC({
-    roomId:        roomId.current,
-    userId:        userId.current,
+    roomId,
+    userId,
     getLocalStream: getStream,
-    enabled:       !!roomId.current && !!userId.current,
+    enabled:       roomId !== "demo-room" && !!roomId && !!userId,
   });
 
   // ── WebSocket ────────────────────────────────────────────────────────────────
@@ -101,11 +118,11 @@ export default function GameScreen() {
   });
 
   useEffect(() => {
-    if (!roomId.current) return;
+    if (!roomId || roomId === "demo-room") return;
     const t = setTimeout(() =>
-      send({ type: "join-room", userId: userId.current, roomId: roomId.current }), 300);
+      send({ type: "join-room", userId, roomId }), 300);
     return () => clearTimeout(t);
-  }, [send]);
+  }, [roomId, send, userId]);
 
   // ── Countdown ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -124,14 +141,34 @@ export default function GameScreen() {
   }, [chatMsgs]);
 
   // ── Submit to backend ────────────────────────────────────────────────────────
-  async function submitCode(finalCode: string) {
-    if (!roomId.current || !finalCode) return;
+  async function submitCode(finalCode: string, result: AiBuildResult) {
+    if (!roomId || !finalCode) return;
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("gamezo_submission_html", finalCode);
+      sessionStorage.setItem(
+        "gamezo_submission_metrics",
+        JSON.stringify({
+          total: result.total,
+          attempts: result.attempts,
+          playability: result.playability,
+          completeness: result.completeness,
+          mobile: result.mobile,
+          chaos: result.chaos,
+          verdict: result.verdict,
+        }),
+      );
+      sessionStorage.setItem("gamezo_submission_title", extractGameTitle(finalCode));
+    }
+    if (roomId === "demo-room") return;
+
     const backend = process.env.NEXT_PUBLIC_BACKEND_HTTP_URL ?? "http://localhost:3001";
     try {
-      await fetch(`${backend}/session/${roomId.current}/submit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: userId.current, html: finalCode, css: "", js: "", assets: [] }),
+      await submitGameToRoom(backend, roomId, {
+        userId,
+        html: finalCode,
+        css: "",
+        js: "",
+        assets: [],
       });
     } catch (e) { console.error("submit failed", e); }
   }
@@ -139,7 +176,7 @@ export default function GameScreen() {
   // ── AI generation (eval-loop: generate → evaluate → refine) ─────────────
   async function sendToAI() {
     const prompt = aiInput.trim();
-    if (!prompt || isGenerating) return;
+    if (!prompt || isGenerating || authLoading) return;
     setAiInput("");
     setIsGenerating(true);
     setEvalBadge(null);
@@ -148,36 +185,34 @@ export default function GameScreen() {
     setAiMessages((prev) => [...prev, { role: "assistant", text: "", isGenerating: true }]);
 
     try {
-      const res = await fetch("/api/ai-build", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, currentCode: code || undefined }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json() as { error?: string };
-        throw new Error(err.error ?? "Request failed");
+      if (!user) {
+        await auth.login();
       }
 
-      // Read eval metadata from headers
-      const total    = Number(res.headers.get("X-Eval-Total")    ?? 0);
-      const attempts = Number(res.headers.get("X-Eval-Attempts") ?? 1);
-      const chaos    = Number(res.headers.get("X-Eval-Chaos")    ?? 0);
-      const verdict  =        res.headers.get("X-Eval-Verdict")  ?? "pass";
-
-      // Read full HTML body
-      const html = await res.text();
+      const result = await buildGameWithAi({ prompt, currentCode: code || undefined });
+      const { html, total, attempts, chaos, verdict } = result;
       const extracted = extractHtml(html);
 
       if (extracted) {
         setCode(extracted);
         setPreview(extracted);
-        submitCode(extracted);
+        submitCode(extracted, result);
         if (total > 0) setEvalBadge({ total, attempts, chaos });
+        memory.reportAction({
+          content: `User generated a Gamezo game: "${prompt}"`,
+          event_type: "create",
+          page: "game",
+          metadata: {
+            type: "create_game",
+            prompt,
+            total,
+            verdict,
+          },
+        }).catch(() => {});
       }
 
       const attemptsLabel = attempts > 1 ? ` (refined ${attempts}×)` : "";
-      const qualityLabel  = total >= 32 ? "🔥 great game" : total >= 28 ? "✓ ready to play" : "⚠ best effort";
+      const qualityLabel  = verdict === "fail" ? "⚠ best effort" : total >= 32 ? "🔥 great game" : total >= 28 ? "✓ ready to play" : "⚠ best effort";
       const chaosLabel    = chaos >= 8 ? " · maximum chaos" : chaos >= 6 ? " · pretty chaotic" : "";
 
       setAiMessages((prev) => {
@@ -217,6 +252,14 @@ export default function GameScreen() {
     return raw.slice(start, end);
   }
 
+  function extractGameTitle(html: string): string {
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    if (titleMatch?.[1]) return titleMatch[1].trim();
+    const h1Match = html.match(/<h1[^>]*>(.*?)<\/h1>/i);
+    if (h1Match?.[1]) return h1Match[1].replace(/<[^>]+>/g, "").trim();
+    return "AI-built game";
+  }
+
   function sendOpponentChat() {
     const txt = chatInput.trim();
     if (!txt) return;
@@ -230,7 +273,6 @@ export default function GameScreen() {
   const timeStr  = `${mins}:${String(secs).padStart(2, "0")}`;
   const isUrgent = secondsLeft <= 30;
   const pct      = secondsLeft / TOTAL_SECONDS;
-  const placeholder = PLACEHOLDER_PROMPTS[Math.floor(Math.random() * PLACEHOLDER_PROMPTS.length)];
 
   // ── render ────────────────────────────────────────────────────────────────
   return (
@@ -447,7 +489,7 @@ export default function GameScreen() {
                       <div key={i} className="w-2 h-2 bg-orange-400 rounded-full animate-ping" style={{ animationDelay: `${i * 0.2}s` }} />
                     ))}
                   </div>
-                  <p className="text-xs text-white/30">Hidden until<br/>time's up</p>
+                  <p className="text-xs text-white/30">Hidden until<br/>time is up</p>
                 </div>
               </div>
               {/* Opponent webcam — populated by WebRTC peer connection */}

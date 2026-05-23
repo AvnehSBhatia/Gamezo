@@ -5,18 +5,52 @@ import { useEffect, useState } from "react";
 
 type Category = { label: string; you: number; opp: number };
 
-const CATEGORIES: Category[] = [
-  { label: "Creativity", you: 82, opp: 74 },
-  { label: "Fun",        you: 68, opp: 91 },
-  { label: "Chaos",      you: 95, opp: 60 },
-];
+interface StoredMetrics {
+  playability?: number;
+  completeness?: number;
+  mobile?: number;
+  chaos?: number;
+}
 
-const JUDGE_LINES = [
-  "Alright… I've seen things today.",
-  "Blue's physics engine sent my chair across the room.",
-  "Orange's chef character had me crying laughing.",
-  "But Chaos? Chaos belongs to Blue.",
-];
+function getStoredMetrics(): StoredMetrics {
+  if (typeof window === "undefined") return {};
+  const raw = sessionStorage.getItem("gamezo_submission_metrics");
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as StoredMetrics;
+  } catch {
+    return {};
+  }
+}
+
+function getCategories(): Category[] {
+  const metrics = getStoredMetrics();
+  const playability = metrics.playability ?? 7;
+  const completeness = metrics.completeness ?? 7;
+  const mobile = metrics.mobile ?? 6;
+  const chaos = metrics.chaos ?? 8;
+
+  return [
+    { label: "Playability", you: playability, opp: 7 },
+    { label: "Completeness", you: completeness, opp: 7 },
+    { label: "Mobile", you: mobile, opp: 6 },
+    { label: "Chaos", you: chaos, opp: 6 },
+  ];
+}
+
+function getGameTitle(): string {
+  if (typeof window === "undefined") return "your game";
+  return sessionStorage.getItem("gamezo_submission_title") ?? "your game";
+}
+
+function getJudgeLines(gameTitle: string): string[] {
+  return [
+    "Alright... time to judge the build.",
+    `Blue shipped ${gameTitle} before the timer ran out.`,
+    "Orange is the demo opponent baseline for this run.",
+    "The score comes from the AI eval loop that reviewed the submitted game.",
+  ];
+}
 
 export default function JudgingScreen() {
   const router = useRouter();
@@ -25,17 +59,25 @@ export default function JudgingScreen() {
   const [voted,      setVoted]      = useState(false);
   const [winner,     setWinner]     = useState<"you" | "opponent" | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [categories] = useState(getCategories);
+  const [gameTitle] = useState(getGameTitle);
+  const [judgeLines] = useState(() => getJudgeLines(getGameTitle()));
+  const [demoMode] = useState(() =>
+    typeof window === "undefined"
+      ? true
+      : sessionStorage.getItem("gamezo_demo_mode") === "true",
+  );
 
   // Type out judge lines
   useEffect(() => {
-    if (lineIdx < JUDGE_LINES.length - 1) {
+    if (lineIdx < judgeLines.length - 1) {
       const t = setTimeout(() => setLineIdx((l) => l + 1), 1600);
       return () => clearTimeout(t);
     }
     // Animate score bars after last line
     const t = setTimeout(() => setAnimBars(true), 800);
     return () => clearTimeout(t);
-  }, [lineIdx]);
+  }, [judgeLines.length, lineIdx]);
 
   function handleVote(w: "you" | "opponent") {
     if (voted) return;
@@ -44,8 +86,8 @@ export default function JudgingScreen() {
     setTimeout(() => setShowResult(true), 500);
   }
 
-  const youTotal  = CATEGORIES.reduce((s, c) => s + c.you, 0);
-  const oppTotal  = CATEGORIES.reduce((s, c) => s + c.opp, 0);
+  const youTotal  = categories.reduce((s, c) => s + c.you, 0);
+  const oppTotal  = categories.reduce((s, c) => s + c.opp, 0);
   const youWon    = youTotal >= oppTotal;
 
   return (
@@ -71,9 +113,11 @@ export default function JudgingScreen() {
         <div className="flex items-start gap-4 mb-8 w-full">
           <img src={ASSETS.judgeAvatar} alt="Judge" className="w-16 h-16 object-contain flex-shrink-0 mt-1" />
           <div className="flex-1 bg-white border-2 border-neutral-200 rounded-2xl rounded-tl-sm px-5 py-4 shadow-lg">
-            <p className="text-xs text-neutral-400 font-bold mb-2 uppercase tracking-wider">Judge speaking…</p>
+            <p className="text-xs text-neutral-400 font-bold mb-2 uppercase tracking-wider">
+              {demoMode ? "Demo judging" : "Judge speaking..."}
+            </p>
             <div className="space-y-1">
-              {JUDGE_LINES.slice(0, lineIdx + 1).map((line, i) => (
+              {judgeLines.slice(0, lineIdx + 1).map((line, i) => (
                 <p
                   key={i}
                   className={`text-sm leading-relaxed transition-all duration-500 ${
@@ -96,23 +140,23 @@ export default function JudgingScreen() {
               <img src={ASSETS.labelYou}  alt="You" className="h-6 object-contain" />
             </div>
             <div className="p-4 space-y-3">
-              {CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <div key={c.label}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-bold text-neutral-600">{c.label}</span>
-                    <span className="text-xs font-black text-blue-500">{animBars ? c.you : 0}</span>
+                    <span className="text-xs font-black text-blue-500">{animBars ? c.you : 0}/10</span>
                   </div>
                   <div className="h-2 bg-blue-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-blue-500 rounded-full transition-all duration-1000"
-                      style={{ width: animBars ? `${c.you}%` : "0%" }}
+                      style={{ width: animBars ? `${c.you * 10}%` : "0%" }}
                     />
                   </div>
                 </div>
               ))}
               <div className="pt-2 border-t border-neutral-100 flex items-center justify-between">
                 <span className="text-xs font-bold text-neutral-500">Total</span>
-                <span className="text-lg font-black text-blue-600">{animBars ? youTotal : 0}</span>
+                <span className="text-lg font-black text-blue-600">{animBars ? youTotal : 0}/40</span>
               </div>
             </div>
           </div>
@@ -129,23 +173,23 @@ export default function JudgingScreen() {
               <img src={ASSETS.labelOpponent}   alt="Opponent"   className="h-6 object-contain" />
             </div>
             <div className="p-4 space-y-3">
-              {CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <div key={c.label}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-bold text-neutral-600">{c.label}</span>
-                    <span className="text-xs font-black text-orange-500">{animBars ? c.opp : 0}</span>
+                    <span className="text-xs font-black text-orange-500">{animBars ? c.opp : 0}/10</span>
                   </div>
                   <div className="h-2 bg-orange-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-orange-500 rounded-full transition-all duration-1000"
-                      style={{ width: animBars ? `${c.opp}%` : "0%" }}
+                      style={{ width: animBars ? `${c.opp * 10}%` : "0%" }}
                     />
                   </div>
                 </div>
               ))}
               <div className="pt-2 border-t border-neutral-100 flex items-center justify-between">
                 <span className="text-xs font-bold text-neutral-500">Total</span>
-                <span className="text-lg font-black text-orange-600">{animBars ? oppTotal : 0}</span>
+                <span className="text-lg font-black text-orange-600">{animBars ? oppTotal : 0}/40</span>
               </div>
             </div>
           </div>
@@ -187,10 +231,12 @@ export default function JudgingScreen() {
                     className="w-20 h-20 object-contain mx-auto mb-3 drop-shadow-xl"
                   />
                   <p className="text-2xl font-black text-neutral-900 mb-1">
-                    {winner === "you" ? "You won the crowd! 🎉" : "Opponent took the crowd 🔥"}
+                    {winner === "you" ? "You won the crowd!" : "Opponent took the crowd"}
                   </p>
                   <p className="text-sm text-neutral-500">
-                    {youWon ? `Your score: ${youTotal} vs ${oppTotal}` : `Their score: ${oppTotal} vs ${youTotal}`}
+                    {youWon
+                      ? `${gameTitle}: ${youTotal}/40 vs ${oppTotal}/40`
+                      : `Demo opponent: ${oppTotal}/40 vs ${youTotal}/40`}
                   </p>
                 </div>
                 <button
