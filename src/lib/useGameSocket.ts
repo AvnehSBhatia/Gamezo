@@ -22,7 +22,10 @@ function getWsBase(): string {
 export function useGameSocket(handlers: Record<string, Handler>) {
   const wsRef      = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;
@@ -67,7 +70,10 @@ export function useGameSocket(handlers: Record<string, Handler>) {
 export function useSignalingSocket(handlers: Record<string, Handler>) {
   const wsRef       = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;

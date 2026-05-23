@@ -1,5 +1,5 @@
-import LandingScreen from "@/components/screens/LandingScreen";
+import { GamezoLandingPage } from "@/components/gamezo/landing";
 
 export default function Home() {
-  return <LandingScreen />;
+  return <GamezoLandingPage />;
 }

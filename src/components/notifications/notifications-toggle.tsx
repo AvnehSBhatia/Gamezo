@@ -19,10 +19,7 @@ export function NotificationsToggle() {
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    if (!user) {
-      setSubscribed(null);
-      return;
-    }
+    if (!user) return;
     let cancelled = false;
     notifications
       .isSubscribed()

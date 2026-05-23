@@ -13,6 +13,24 @@ video[srcobject] ~ .cam-placeholder {
   display: none;
 }
 
+/* Gamezo is demoed directly in desktop browsers during judging. The Eazo SDK
+ * still stays mounted for auth/device state, but its web-only app handoff
+ * promotion must not cover the playable experience. */
+.eazo-handoff-root,
+.eazo-banner-root,
+.eazo-bottom-root,
+.eazo-handoff-overlay {
+  display: none !important;
+}
+
+html.eazo-host-web .eazo-app-area,
+html.eazo-host-web .eazo-app-area-scroller {
+  display: contents !important;
+  position: static !important;
+  inset: auto !important;
+  overflow: visible !important;
+  transform: none !important;
+}
 
 @custom-variant dark (&:is(.dark *));
 
