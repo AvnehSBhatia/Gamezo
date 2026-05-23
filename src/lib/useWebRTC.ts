@@ -13,10 +13,21 @@
  */
 import { useCallback, useEffect, useRef } from "react";
 
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-];
+function getIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+  const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
+  if (turnUrl) {
+    servers.push({
+      urls: turnUrl,
+      username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+      credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+    });
+  }
+  return servers;
+}
 
 interface UseWebRTCOpts {
   roomId: string;
@@ -56,7 +67,7 @@ export function useWebRTC({ roomId, userId, getLocalStream, enabled }: UseWebRTC
     const ws = new WebSocket(`${wsBase}/ws/signaling`);
     wsRef.current = ws;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: getIceServers() });
     pcRef.current = pc;
 
     // Add local tracks once stream is available
@@ -91,7 +102,12 @@ export function useWebRTC({ roomId, userId, getLocalStream, enabled }: UseWebRTC
     };
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "join-room", userId, roomId }));
+      ws.send(JSON.stringify({
+        type: "join-room",
+        userId,
+        roomId,
+        matchToken: sessionStorage.getItem("gamezo_matchToken") ?? "",
+      }));
     };
 
     ws.onmessage = async (ev) => {

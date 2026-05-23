@@ -17,16 +17,16 @@ const SITE_URL = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
   : undefined;
 
-const SITE_TITLE = "Eazo Developer Home";
+const SITE_TITLE = "Gamezo";
 const SITE_DESCRIPTION =
-  "Developer onboarding, secure session flow, and backend verification examples.";
+  "A chaotic head-to-head AI game builder where two players create, demo, vote, and get judged in real time.";
 
 export const metadata: Metadata = {
   ...(SITE_URL ? { metadataBase: new URL(SITE_URL) } : {}),
   title: SITE_TITLE,
   description: SITE_DESCRIPTION,
   icons: {
-    icon: "https://eazo.ai/favicon.ico",
+    icon: "/favicon.ico",
   },
   // Social preview cards (Open Graph + Twitter). Most platforms (X,
   // Facebook, LinkedIn, Slack, Discord, WeChat, iMessage) read these
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   // metadata and overrides `openGraph.images` below at build time.
   openGraph: {
     type: "website",
-    siteName: "Eazo",
+    siteName: "Gamezo",
     title: SITE_TITLE,
     description: SITE_DESCRIPTION,
     url: "/",

@@ -2,12 +2,11 @@
  * Thin WebSocket client for the game WS endpoint.
  * Handles connect, send, reconnect, and typed message dispatch.
  *
- * WS connections go to the SAME host/port as the page — the custom
- * Next.js server proxies /ws/game and /ws/signaling to the backend.
- * This means ws://localhost:3001 is never used from the browser.
+ * WS connections go to the same host/port as the page. The custom
+ * Next.js server owns /ws/game and /ws/signaling directly.
  */
 "use client";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 
 export type WsMessage = Record<string, unknown> & { type: string };
 type Handler = (msg: WsMessage) => void;
@@ -22,7 +21,11 @@ function getWsBase(): string {
 export function useGameSocket(handlers: Record<string, Handler>) {
   const wsRef      = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;
@@ -32,6 +35,7 @@ export function useGameSocket(handlers: Record<string, Handler>) {
       if (!alive) return;
       ws = new WebSocket(`${getWsBase()}/ws/game`);
       wsRef.current = ws;
+      ws.onopen = () => setConnected(true);
 
       ws.onmessage = (ev) => {
         try {
@@ -42,6 +46,7 @@ export function useGameSocket(handlers: Record<string, Handler>) {
       };
 
       ws.onclose = () => {
+        setConnected(false);
         if (alive) setTimeout(connect, 2000);
       };
     }
@@ -61,13 +66,15 @@ export function useGameSocket(handlers: Record<string, Handler>) {
     }
   }, []);
 
-  return { send };
+  return { send, connected };
 }
 
 export function useSignalingSocket(handlers: Record<string, Handler>) {
   const wsRef       = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  useEffect(() => {
+    handlersRef.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     let alive = true;

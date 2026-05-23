@@ -22,7 +22,7 @@ export default function MatchmakingScreen() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { send } = useGameSocket({
+  const { send, connected } = useGameSocket({
     queued: () => {
       // Just stay on searching — no fake steps
     },
@@ -39,6 +39,7 @@ export default function MatchmakingScreen() {
       sessionStorage.setItem("gamezo_yourSlot", info.yourSlot);
       sessionStorage.setItem("gamezo_playerA",  info.playerA);
       sessionStorage.setItem("gamezo_playerB",  info.playerB);
+      sessionStorage.setItem("gamezo_matchToken", String(msg["matchToken"] ?? ""));
     },
     "phase-change": (msg) => {
       if (msg["state"] === "BUILD_PHASE" || msg["state"] === "ROOM_READY") {
@@ -49,12 +50,10 @@ export default function MatchmakingScreen() {
   });
 
   useEffect(() => {
+    if (!connected) return;
     const userId = getUserId();
-    const t = setTimeout(() => {
-      send({ type: "enqueue", userId });
-    }, 400);
-    return () => clearTimeout(t);
-  }, [send]);
+    send({ type: "enqueue", userId });
+  }, [connected, send]);
 
   return (
     <div className="min-h-screen bg-[#FFFAF4] flex flex-col items-center justify-center relative overflow-x-hidden font-sans px-6">

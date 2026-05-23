@@ -1,30 +1,26 @@
-A minimal Next.js starter for building apps inside the [Eazo](https://eazo.ai) platform. Includes a working example of the Eazo session token flow: the app requests the encrypted user token from the host via `postMessage`, sends it to a Next.js API route, decrypts it server-side with `@eazo/node-sdk`, and returns the user profile.
+# Gamezo
+
+Gamezo is a head-to-head AI game builder. Two anonymous players are matched into a room, use AI to build tiny sandboxed HTML games, submit when ready, demo each game, vote, and receive an AI judge result.
 
 ## Getting Started
 
 Install dependencies with Bun:
 
 ```bash
-bun install
+bun install --frozen-lockfile
 ```
 
-If dependency installation stalls on this machine during `sharp` setup, use:
-
-```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 bun install
-```
-
-Then start the development server:
+Start the app with the custom server. This is required because the app hosts its own `/ws/game` and `/ws/signaling` WebSocket endpoints:
 
 ```bash
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in two browser windows to test matchmaking.
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in your private key:
+Copy `.env.example` to `.env` and fill in deployment-specific values:
 
 ```bash
 cp .env.example .env
@@ -32,17 +28,23 @@ cp .env.example .env
 
 | Variable | Description |
 |---|---|
-| `EAZO_PRIVATE_KEY` | Your Eazo developer private key (hex, 64 chars). Used server-side to decrypt the user session token. |
+| `EAZO_PRIVATE_KEY` | Private key used by the Eazo SDK on server-side routes. Never commit a real value. |
+| `EAZO_APP_ID` | Eazo app id for platform capabilities. |
+| `DATABASE_URL` | Optional PostgreSQL URL. When set, Gamezo persists match snapshots, submissions, votes, and judging results. |
+| `GAMEZO_BUILD_MS` | Optional build phase duration in milliseconds. Defaults to `300000`. |
+| `GAMEZO_DEMO_MS` | Optional per-player demo duration in milliseconds. Defaults to `45000`. |
+| `NEXT_PUBLIC_TURN_URL` | Optional TURN server URL for WebRTC outside local networks. |
+| `NEXT_PUBLIC_TURN_USERNAME` | Optional TURN username. |
+| `NEXT_PUBLIC_TURN_CREDENTIAL` | Optional TURN credential. |
+| `CRON_SECRET` | Shared secret for notification cron endpoints. |
 
-You can generate a keypair in the Eazo developer settings. Never expose the private key to the browser.
+## Verification
 
-## Learn More
+```bash
+bun run lint
+bun run build
+```
 
-- [Eazo Documentation](https://docs.eazo.ai)
-- [Next.js Documentation](https://nextjs.org/docs)
+## Security Note
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The development `.env` file is ignored by git. If a real `EAZO_PRIVATE_KEY` was shared in any archive or external channel, rotate it before deploying.
