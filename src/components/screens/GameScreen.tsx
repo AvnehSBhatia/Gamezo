@@ -4,8 +4,9 @@ import { useGameSocket } from "@/lib/useGameSocket";
 import { useWebcam } from "@/lib/useWebcam";
 import { useWebRTC } from "@/lib/useWebRTC";
 import { TOTAL_SECONDS, type ChatMsg } from "@/lib/game-data";
+import type { MatchPhase, PlayerSlot } from "@/lib/gamezo-runtime";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function getSession(key: string, fallback = "") {
@@ -39,12 +40,16 @@ interface AiMsg {
 export default function GameScreen() {
   const router = useRouter();
 
-  const roomId   = useRef(getSession("gamezo_roomId"));
-  const userId   = useRef(getSession("gamezo_userId"));
+  const [roomId] = useState(() => getSession("gamezo_roomId"));
+  const [userId] = useState(() => getSession("gamezo_userId"));
+  const [matchToken] = useState(() => getSession("gamezo_matchToken"));
+  const [yourSlot] = useState<PlayerSlot>(() => (
+    getSession("gamezo_yourSlot") === "playerB" ? "playerB" : "playerA"
+  ));
 
   // Timer
   const [secondsLeft, setSecondsLeft] = useState(TOTAL_SECONDS);
-  const [phase, setPhase] = useState<"BUILD_PHASE" | "RUN_PHASE" | "GRADING" | "COMPLETE">("BUILD_PHASE");
+  const [phase, setPhase] = useState<MatchPhase>("BUILD_PHASE");
 
   // Game code + preview
   const [code,    setCode]    = useState("");
@@ -60,7 +65,11 @@ export default function GameScreen() {
   const [aiInput,      setAiInput]      = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [evalBadge,    setEvalBadge]    = useState<{ total: number; attempts: number; chaos: number } | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [opponentReady, setOpponentReady] = useState(false);
   const aiChatRef = useRef<HTMLDivElement>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
   // Opponent chat
   const [chatInput,  setChatInput]  = useState("");
@@ -75,41 +84,56 @@ export default function GameScreen() {
 
   // WebRTC — opponent's camera via peer connection
   const { attachPeerStream } = useWebRTC({
-    roomId:        roomId.current,
-    userId:        userId.current,
+    roomId,
+    userId,
     getLocalStream: getStream,
-    enabled:       !!roomId.current && !!userId.current,
+    enabled:       !!roomId && !!userId,
   });
 
   // ── WebSocket ────────────────────────────────────────────────────────────────
-  const { send } = useGameSocket({
+  const { send, connected } = useGameSocket({
     "phase-change": (msg) => {
-      const newPhase = String(msg["state"]) as typeof phase;
+      const newPhase = String(msg["state"]) as MatchPhase;
       setPhase(newPhase);
       const remaining = Number(msg["remainingMs"] ?? 0);
       if (remaining > 0) setSecondsLeft(Math.round(remaining / 1000));
-      if (newPhase === "GRADING" || newPhase === "COMPLETE") router.push("/judging");
+      if (newPhase === "VOTING" || newPhase === "COMPLETE") router.push("/judging");
     },
     "sync-state": (msg) => {
-      const st = String(msg["state"]) as typeof phase;
+      const st = String(msg["state"]) as MatchPhase;
       setPhase(st);
       const remaining = Number(msg["remainingMs"] ?? 0);
       if (remaining > 0) setSecondsLeft(Math.round(remaining / 1000));
     },
-    "grade-complete": () => router.push("/judging"),
+    "ready-update": (msg) => {
+      const state = msg["ready"] as Partial<Record<PlayerSlot, boolean>>;
+      setReady(Boolean(state?.[yourSlot]));
+      setOpponentReady(Boolean(state?.[yourSlot === "playerA" ? "playerB" : "playerA"]));
+    },
+    "submission-update": (msg) => {
+      if (msg["slot"] === yourSlot) setSubmitted(true);
+    },
+    "chat-message": (msg) => {
+      const from = msg["from"] === userId ? "you" : "opponent";
+      setChatMsgs((items) => [...items, { from, text: String(msg["text"] ?? "") }]);
+    },
+    "demo-input": (msg) => {
+      previewFrameRef.current?.contentWindow?.postMessage({
+        type: "gamezo-demo-input",
+        event: msg["event"],
+      }, "*");
+    },
     error: (msg) => console.error("[WS]", msg["message"]),
   });
 
   useEffect(() => {
-    if (!roomId.current) return;
-    const t = setTimeout(() =>
-      send({ type: "join-room", userId: userId.current, roomId: roomId.current }), 300);
-    return () => clearTimeout(t);
-  }, [send]);
+    if (!connected || !roomId || !userId) return;
+    send({ type: "join-room", userId, roomId, matchToken });
+  }, [connected, matchToken, roomId, send, userId]);
 
   // ── Countdown ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (phase !== "BUILD_PHASE" && phase !== "RUN_PHASE") return;
+    if (phase !== "BUILD_PHASE" && phase !== "PLAYER_A_DEMO" && phase !== "PLAYER_B_DEMO") return;
     if (secondsLeft <= 0) return;
     const t = setTimeout(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000);
     return () => clearTimeout(t);
@@ -124,16 +148,10 @@ export default function GameScreen() {
   }, [chatMsgs]);
 
   // ── Submit to backend ────────────────────────────────────────────────────────
-  async function submitCode(finalCode: string) {
-    if (!roomId.current || !finalCode) return;
-    const backend = process.env.NEXT_PUBLIC_BACKEND_HTTP_URL ?? "http://localhost:3001";
-    try {
-      await fetch(`${backend}/session/${roomId.current}/submit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: userId.current, html: finalCode, css: "", js: "", assets: [] }),
-      });
-    } catch (e) { console.error("submit failed", e); }
+  function submitCode(finalCode: string) {
+    if (!roomId || !userId || !finalCode) return;
+    send({ type: "submit-game", userId, roomId, matchToken, html: finalCode });
+    setSubmitted(true);
   }
 
   // ── AI generation (eval-loop: generate → evaluate → refine) ─────────────
@@ -151,7 +169,7 @@ export default function GameScreen() {
       const res = await fetch("/api/ai-build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, currentCode: code || undefined }),
+        body: JSON.stringify({ prompt, currentCode: code || undefined, roomId, userId, matchToken }),
       });
 
       if (!res.ok) {
@@ -163,15 +181,13 @@ export default function GameScreen() {
       const total    = Number(res.headers.get("X-Eval-Total")    ?? 0);
       const attempts = Number(res.headers.get("X-Eval-Attempts") ?? 1);
       const chaos    = Number(res.headers.get("X-Eval-Chaos")    ?? 0);
-      const verdict  =        res.headers.get("X-Eval-Verdict")  ?? "pass";
-
       // Read full HTML body
       const html = await res.text();
       const extracted = extractHtml(html);
 
       if (extracted) {
         setCode(extracted);
-        setPreview(extracted);
+        setPreview(injectDemoRelay(extracted));
         submitCode(extracted);
         if (total > 0) setEvalBadge({ total, attempts, chaos });
       }
@@ -217,12 +233,73 @@ export default function GameScreen() {
     return raw.slice(start, end);
   }
 
+  function injectDemoRelay(html: string): string {
+    const relay = `<script>
+window.addEventListener("message",function(e){
+  if(!e.data||e.data.type!=="gamezo-demo-input")return;
+  var ev=e.data.event||{};
+  var target=document.elementFromPoint(ev.x||innerWidth/2,ev.y||innerHeight/2)||document.body;
+  if(ev.kind==="key"){
+    target.dispatchEvent(new KeyboardEvent(ev.name,{key:ev.key,bubbles:true}));
+  } else {
+    target.dispatchEvent(new PointerEvent(ev.name,{clientX:ev.x||0,clientY:ev.y||0,bubbles:true}));
+    target.dispatchEvent(new MouseEvent(ev.name.replace("pointer","mouse"),{clientX:ev.x||0,clientY:ev.y||0,bubbles:true}));
+  }
+});
+</script>`;
+    return html.includes("</body>") ? html.replace("</body>", `${relay}</body>`) : `${html}${relay}`;
+  }
+
   function sendOpponentChat() {
     const txt = chatInput.trim();
     if (!txt) return;
-    setChatMsgs((m) => [...m, { from: "you", text: txt }]);
+    send({ type: "chat-message", roomId, userId, matchToken, text: txt });
     setChatInput("");
   }
+
+  function markReady() {
+    if (!code) return;
+    if (!submitted) submitCode(code);
+    setReady(true);
+    send({ type: "player-ready", roomId, userId, matchToken });
+  }
+
+  useEffect(() => {
+    const activeSlot = phase === "PLAYER_A_DEMO" ? "playerA" : phase === "PLAYER_B_DEMO" ? "playerB" : null;
+    if (activeSlot !== yourSlot) return;
+
+    function sendPointer(event: PointerEvent) {
+      send({
+        type: "demo-input",
+        roomId,
+        userId,
+        matchToken,
+        event: { kind: "pointer", name: event.type, x: event.clientX, y: event.clientY },
+      });
+    }
+    function sendKey(event: KeyboardEvent) {
+      send({
+        type: "demo-input",
+        roomId,
+        userId,
+        matchToken,
+        event: { kind: "key", name: event.type, key: event.key },
+      });
+    }
+
+    window.addEventListener("pointerdown", sendPointer);
+    window.addEventListener("pointermove", sendPointer);
+    window.addEventListener("pointerup", sendPointer);
+    window.addEventListener("keydown", sendKey);
+    window.addEventListener("keyup", sendKey);
+    return () => {
+      window.removeEventListener("pointerdown", sendPointer);
+      window.removeEventListener("pointermove", sendPointer);
+      window.removeEventListener("pointerup", sendPointer);
+      window.removeEventListener("keydown", sendKey);
+      window.removeEventListener("keyup", sendKey);
+    };
+  }, [matchToken, phase, roomId, send, userId, yourSlot]);
 
   // ── Timer display ─────────────────────────────────────────────────────────
   const mins     = Math.floor(secondsLeft / 60);
@@ -230,7 +307,13 @@ export default function GameScreen() {
   const timeStr  = `${mins}:${String(secs).padStart(2, "0")}`;
   const isUrgent = secondsLeft <= 30;
   const pct      = secondsLeft / TOTAL_SECONDS;
-  const placeholder = PLACEHOLDER_PROMPTS[Math.floor(Math.random() * PLACEHOLDER_PROMPTS.length)];
+  const placeholder = useMemo(
+    () => {
+      const seed = userId.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+      return PLACEHOLDER_PROMPTS[seed % PLACEHOLDER_PROMPTS.length];
+    },
+    [userId]
+  );
 
   // ── render ────────────────────────────────────────────────────────────────
   return (
@@ -268,7 +351,8 @@ export default function GameScreen() {
           {/* YOUR label row */}
           <div className="flex items-center gap-2 px-3 py-2 bg-[#1E2A3A] border-b border-blue-500/30 flex-shrink-0">
             <img src={ASSETS.labelYou} alt="You" className="h-5 object-contain" />
-            {camError && <span className="text-[10px] text-red-400 ml-1">cam blocked</span>}
+              {camError && <span className="text-[10px] text-red-400 ml-1">cam blocked</span>}
+              <span className="text-[10px] text-white/45 font-semibold uppercase tracking-wide">{phase.replaceAll("_", " ")}</span>
             <div className="ml-auto flex items-center gap-1.5 text-[10px] text-green-400 font-semibold">
               <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
               {hasCamera ? "cam live" : "AI ready"}
@@ -346,11 +430,11 @@ export default function GameScreen() {
                     sendToAI();
                   }
                 }}
-                disabled={isGenerating}
+                disabled={isGenerating || phase !== "BUILD_PHASE"}
               />
               <button
                 onClick={sendToAI}
-                disabled={isGenerating || !aiInput.trim()}
+                disabled={isGenerating || !aiInput.trim() || phase !== "BUILD_PHASE"}
                 className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-all disabled:opacity-30
                   bg-gradient-to-br from-blue-500 to-purple-600 hover:from-blue-400 hover:to-purple-500 active:scale-95 shadow-lg"
               >
@@ -364,6 +448,13 @@ export default function GameScreen() {
             <p className="text-[10px] text-white/25 mt-2 px-1">
               Shift+Enter for new line · Enter to send
             </p>
+            <button
+              onClick={markReady}
+              disabled={!code || ready || phase !== "BUILD_PHASE"}
+              className="mt-3 w-full rounded-xl bg-green-500 px-3 py-2 text-xs font-black uppercase tracking-wide text-black transition hover:bg-green-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {ready ? opponentReady ? "Both ready" : "Ready - waiting for opponent" : submitted ? "Ready up" : "Submit and ready"}
+            </button>
           </div>
 
           {/* ── YOUR WEBCAM ──────────────────────────────────────────── */}
@@ -425,6 +516,7 @@ export default function GameScreen() {
             {/* Preview iframe */}
             <div className="flex-1 bg-[#0A0A0A]">
               <iframe
+                ref={previewFrameRef}
                 key={preview}
                 className="w-full h-full border-0"
                 srcDoc={preview}
@@ -447,7 +539,7 @@ export default function GameScreen() {
                       <div key={i} className="w-2 h-2 bg-orange-400 rounded-full animate-ping" style={{ animationDelay: `${i * 0.2}s` }} />
                     ))}
                   </div>
-                  <p className="text-xs text-white/30">Hidden until<br/>time's up</p>
+                  <p className="text-xs text-white/30">Hidden until<br/>time&apos;s up</p>
                 </div>
               </div>
               {/* Opponent webcam — populated by WebRTC peer connection */}
@@ -457,7 +549,6 @@ export default function GameScreen() {
                     ref={attachPeerStream}
                     autoPlay
                     playsInline
-                    muted
                     className="absolute inset-0 w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-neutral-900 peer-video-placeholder">

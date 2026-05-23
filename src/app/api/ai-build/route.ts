@@ -1,5 +1,8 @@
 import { ai } from "@eazo/sdk";
 import { NextRequest, NextResponse } from "next/server";
+import { getGamezoRuntime } from "@/lib/gamezo-runtime";
+
+export const runtime = "nodejs";
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +55,12 @@ Fix ALL the listed issues and return a COMPLETE, improved HTML document.
 const MODEL = "deepseek.v3.1";
 const MAX_RETRIES = 2;
 const PASS_THRESHOLD = 28;
+const MAX_PROMPT_CHARS = 1200;
+const MAX_CODE_CHARS = 120000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 6;
+
+const rateLimit = new Map<string, number[]>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +74,34 @@ function extractHtml(raw: string): string {
   const end   = raw.lastIndexOf("</html>") + "</html>".length;
   if (start === -1 || end < 9) return raw.trim();
   return raw.slice(start, end);
+}
+
+function isSandboxSafeHtml(html: string): boolean {
+  const blocked = [
+    /<script[^>]+src=/i,
+    /<link[^>]+href=/i,
+    /<iframe/i,
+    /\bfetch\s*\(/i,
+    /\bXMLHttpRequest\b/i,
+    /\bWebSocket\b/i,
+    /\blocalStorage\b/i,
+    /\bsessionStorage\b/i,
+    /\bnavigator\.sendBeacon\b/i,
+    /\bimport\s*\(/i,
+  ];
+  return html.startsWith("<!DOCTYPE html>") && !blocked.some((pattern) => pattern.test(html));
+}
+
+function checkRateLimit(key: string): boolean {
+  const now = Date.now();
+  const hits = (rateLimit.get(key) ?? []).filter((ts) => now - ts < RATE_LIMIT_WINDOW_MS);
+  if (hits.length >= RATE_LIMIT_MAX) {
+    rateLimit.set(key, hits);
+    return false;
+  }
+  hits.push(now);
+  rateLimit.set(key, hits);
+  return true;
 }
 
 interface EvalResult {
@@ -147,16 +184,51 @@ async function buildWithEval(prompt: string, currentCode?: string): Promise<{
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, currentCode } = await req.json() as {
+    const { prompt, currentCode, roomId, userId, matchToken } = await req.json() as {
       prompt: string;
       currentCode?: string;
+      roomId?: string;
+      userId?: string;
+      matchToken?: string;
     };
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "No prompt provided" }, { status: 400 });
     }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      return NextResponse.json({ error: "Prompt is too long" }, { status: 413 });
+    }
+    if (currentCode && currentCode.length > MAX_CODE_CHARS) {
+      return NextResponse.json({ error: "Current game is too large" }, { status: 413 });
+    }
+
+    const runtimeStore = getGamezoRuntime();
+    if (!runtimeStore) {
+      return NextResponse.json(
+        { error: "Game server is unavailable. Start the app with bun dev or node server.mjs." },
+        { status: 503 }
+      );
+    }
+    if (!roomId || !userId || !matchToken) {
+      return NextResponse.json({ error: "Missing match credentials" }, { status: 401 });
+    }
+    const validation = await runtimeStore.validateAction({
+      roomId,
+      userId,
+      matchToken,
+      allowedPhases: ["BUILD_PHASE"],
+    });
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status });
+    }
+    if (!checkRateLimit(`${roomId}:${userId}`)) {
+      return NextResponse.json({ error: "Too many AI requests. Wait a minute and retry." }, { status: 429 });
+    }
 
     const { html, evalResult, attempts } = await buildWithEval(prompt.trim(), currentCode);
+    if (!isSandboxSafeHtml(html)) {
+      return NextResponse.json({ error: "Generated game used blocked browser capabilities. Try a simpler prompt." }, { status: 422 });
+    }
 
     // Return HTML as a streaming-compatible plain text response
     // plus eval metadata in a header so the frontend can show a score badge
