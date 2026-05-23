@@ -20,10 +20,17 @@ interface MobileGameTabsProps {
   attachStream: RefCallback<HTMLVideoElement>;
   attachPeerStream: RefCallback<HTMLVideoElement>;
   hasCamera: boolean;
+  hasRemoteStream?: boolean;
+  cameraError?: string | null;
+  cameraRequesting?: boolean;
+  onEnableCamera?: () => void;
   onInputChange: (value: string) => void;
   onSend: () => void;
   onReset: () => void;
   onFix: () => void;
+  onGenerateSprite: () => void;
+  isGeneratingSprite: boolean;
+  assetCount: number;
 }
 
 export function MobileGameTabs({
@@ -39,10 +46,17 @@ export function MobileGameTabs({
   attachStream,
   attachPeerStream,
   hasCamera,
+  hasRemoteStream = false,
+  cameraError = null,
+  cameraRequesting = false,
+  onEnableCamera,
   onInputChange,
   onSend,
   onReset,
   onFix,
+  onGenerateSprite,
+  isGeneratingSprite,
+  assetCount,
 }: MobileGameTabsProps) {
   return (
     <div className="px-4 pb-5 lg:hidden">
@@ -58,11 +72,45 @@ export function MobileGameTabs({
         ))}
       </div>
       {activeTab === "AI" && (
-        <AiBuilderPanel messages={messages} input={input} isGenerating={isGenerating} chatRef={chatRef} onInputChange={onInputChange} onSend={onSend} />
+        <div className="h-[calc(100dvh-12rem)]">
+          <AiBuilderPanel
+            messages={messages}
+            input={input}
+            isGenerating={isGenerating}
+            chatRef={chatRef}
+            attachStream={attachStream}
+            hasCamera={hasCamera}
+            cameraError={cameraError}
+            cameraRequesting={cameraRequesting}
+            onEnableCamera={onEnableCamera}
+            onInputChange={onInputChange}
+            onSend={onSend}
+          />
+        </div>
       )}
       {activeTab === "Preview" && <LivePreviewPanel preview={preview} evalBadge={evalBadge} isGenerating={isGenerating} />}
-      {activeTab === "Code" && <CodeToolsPanel code={code} evalBadge={evalBadge} onReset={onReset} onFix={onFix} />}
-      {activeTab === "Players" && <VideoRail attachStream={attachStream} attachPeerStream={attachPeerStream} hasCamera={hasCamera} />}
+      {activeTab === "Code" && (
+        <CodeToolsPanel
+          code={code}
+          evalBadge={evalBadge}
+          onReset={onReset}
+          onFix={onFix}
+          onGenerateSprite={onGenerateSprite}
+          isGeneratingSprite={isGeneratingSprite}
+          assetCount={assetCount}
+        />
+      )}
+      {activeTab === "Players" && (
+        <VideoRail
+          attachStream={attachStream}
+          attachPeerStream={attachPeerStream}
+          hasCamera={hasCamera}
+          hasRemoteStream={hasRemoteStream}
+          cameraError={cameraError}
+          cameraRequesting={cameraRequesting}
+          onEnableCamera={onEnableCamera}
+        />
+      )}
     </div>
   );
 }

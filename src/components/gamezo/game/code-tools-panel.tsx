@@ -8,9 +8,20 @@ interface CodeToolsPanelProps {
   evalBadge: EvalBadge | null;
   onReset: () => void;
   onFix: () => void;
+  onGenerateSprite: () => void;
+  isGeneratingSprite: boolean;
+  assetCount: number;
 }
 
-export function CodeToolsPanel({ code, evalBadge, onReset, onFix }: CodeToolsPanelProps) {
+export function CodeToolsPanel({
+  code,
+  evalBadge,
+  onReset,
+  onFix,
+  onGenerateSprite,
+  isGeneratingSprite,
+  assetCount,
+}: CodeToolsPanelProps) {
   const lines = (code || "<!DOCTYPE html>\n<html>\n<body>\n  <div id=\"game\"></div>\n</body>\n</html>").split("\n").slice(0, 14);
 
   return (
@@ -19,9 +30,9 @@ export function CodeToolsPanel({ code, evalBadge, onReset, onFix }: CodeToolsPan
         {["HTML", "CSS", "JS", "Assets"].map((tab, index) => (
           <button
             key={tab}
-            className={`rounded-xl border px-3 py-2 ${index === 0 ? "border-orange-300 bg-orange-50 text-orange-600" : "border-neutral-200 text-neutral-600"}`}
+            className={`rounded-xl border px-3 py-2 ${index === 0 ? "border-orange-300 bg-orange-50 text-orange-600" : index === 3 && assetCount > 0 ? "border-blue-300 bg-blue-50 text-blue-600" : "border-neutral-200 text-neutral-600"}`}
           >
-            {tab}
+            {tab}{index === 3 && assetCount > 0 ? ` (${assetCount})` : ""}
           </button>
         ))}
       </div>
@@ -45,19 +56,24 @@ export function CodeToolsPanel({ code, evalBadge, onReset, onFix }: CodeToolsPan
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <button onClick={onFix} className="flex items-center justify-center gap-2 rounded-2xl border-2 border-orange-200 px-4 py-4 text-lg font-black text-orange-600">
+        <button type="button" onClick={onFix} className="flex items-center justify-center gap-2 rounded-2xl border-2 border-orange-200 px-4 py-4 text-lg font-black text-orange-600">
           <Wrench className="h-6 w-6" />
           Fix
         </button>
-        <button onClick={onReset} className="flex items-center justify-center gap-2 rounded-2xl border-2 border-orange-200 px-4 py-4 text-lg font-black text-orange-600">
+        <button type="button" onClick={onReset} className="flex items-center justify-center gap-2 rounded-2xl border-2 border-orange-200 px-4 py-4 text-lg font-black text-orange-600">
           <RotateCcw className="h-6 w-6" />
           Reset
         </button>
       </div>
 
-      <button className="mt-3 flex items-center justify-center gap-2 rounded-2xl border-2 border-blue-200 px-4 py-4 text-lg font-black text-blue-600">
+      <button
+        type="button"
+        onClick={onGenerateSprite}
+        disabled={isGeneratingSprite}
+        className="mt-3 flex items-center justify-center gap-2 rounded-2xl border-2 border-blue-200 px-4 py-4 text-lg font-black text-blue-600 disabled:opacity-60"
+      >
         <Sparkles className="h-6 w-6" />
-        Generate sprite
+        {isGeneratingSprite ? "Generating…" : "Generate sprite"}
       </button>
     </aside>
   );

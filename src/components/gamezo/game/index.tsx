@@ -3,83 +3,166 @@
 import { BuildArena } from "@/components/gamezo/game/build-arena";
 import type { AiMsg, EvalBadge, GamePhase } from "@/components/gamezo/game/game-types";
 import { PromptLockScreen } from "@/components/gamezo/game/prompt-lock-screen";
-import { getOrCreateUserId, getRoomCode, getSessionValue } from "@/components/gamezo/game/session";
-import { buildGameWithAi, submitGameCode } from "@/lib/api";
+import {
+  clearMatchSession,
+  getRoomCode,
+  getSessionValue,
+  setSessionValue,
+  storeMatchFromWs,
+} from "@/components/gamezo/game/session";
+import { buildGameWithAi, generateSprite, storeJudgeResult, submitGameCode } from "@/lib/api";
+import type { GameAsset } from "@/components/gamezo/game/game-types";
+import { pickChaosSeed } from "@/lib/chaos-seeds";
 import { TOTAL_SECONDS } from "@/lib/game-data";
+import { useMatchSession } from "@/lib/use-match-session";
+import { useSafeNavigate } from "@/lib/use-safe-navigate";
 import { useGameSocket } from "@/lib/useGameSocket";
 import { useWebcam } from "@/lib/useWebcam";
 import { useWebRTC } from "@/lib/useWebRTC";
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 const EMPTY_PREVIEW = `<!DOCTYPE html>
 <html><body style="margin:0;background:#111;color:#555;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center">
 <div><div style="font-size:3rem;margin-bottom:1rem">GAMEZO</div><p style="font-size:1rem">Lock a prompt, then ask the AI to build.</p></div>
 </body></html>`;
 
-const DEFAULT_PROMPT = "a boss fight where the floor is a keyboard";
-
 export function GamezoGamePage() {
-  const router = useRouter();
-  const [roomId] = useState(() => getSessionValue("gamezo_roomId"));
-  const [userId] = useState(() => getOrCreateUserId());
+  const navigate = useSafeNavigate();
+  const { roomId, userId, yourSlot, hydrated } = useMatchSession();
   const aiChatRef = useRef<HTMLDivElement>(null);
 
-  const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
+  const [chaosSeed, setChaosSeed] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [selfPromptLocked, setSelfPromptLocked] = useState(false);
   const [promptLocked, setPromptLocked] = useState(false);
+  const [opponentPromptLocked, setOpponentPromptLocked] = useState(false);
+  const [opponentReady, setOpponentReady] = useState(false);
+  const [selfReady, setSelfReady] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(TOTAL_SECONDS);
-  const [phase, setPhase] = useState<GamePhase>("BUILD_PHASE");
+  const [phase, setPhase] = useState<GamePhase>("WAITING_PROMPTS");
   const [code, setCode] = useState("");
   const [preview, setPreview] = useState(EMPTY_PREVIEW);
+  const [assets, setAssets] = useState<GameAsset[]>([]);
   const [aiInput, setAiInput] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingSprite, setIsGeneratingSprite] = useState(false);
   const [evalBadge, setEvalBadge] = useState<EvalBadge | null>(null);
   const [activeTab, setActiveTab] = useState<"AI" | "Preview" | "Code" | "Players">("AI");
-  const [aiMessages, setAiMessages] = useState<AiMsg[]>([
-    {
-      role: "system",
-      text: "Lock your prompt, then ask the AI builder to generate and improve a playable one-file game.",
-    },
-  ]);
+  const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
 
-  const { attachStream, getStream, hasCamera } = useWebcam();
-  const { attachPeerStream } = useWebRTC({
+  useEffect(() => {
+    if (!hydrated) return;
+    const seed = getSessionValue("gamezo_chaosSeed", pickChaosSeed());
+    setChaosSeed(seed);
+    setPrompt(seed);
+    setPromptLocked(getSessionValue("gamezo_promptLocked") === "1");
+    setAiMessages([
+      { role: "system", text: `Chaos seed: "${seed}". Lock your prompt, then ask the AI builder to generate a playable one-file game.` },
+    ]);
+  }, [hydrated]);
+
+  const { attachStream, getStream, hasCamera, error: cameraError, requesting: cameraRequesting, requestCamera } = useWebcam();
+  const { attachPeerStream, hasRemoteStream } = useWebRTC({
     roomId,
     userId,
     getLocalStream: getStream,
     enabled: !!roomId && !!userId,
   });
 
-  const { send } = useGameSocket({
-    "phase-change": (msg) => {
-      const newPhase = String(msg["state"]) as GamePhase;
-      setPhase(newPhase);
-      const remaining = Number(msg["remainingMs"] ?? 0);
-      if (remaining > 0) setSecondsLeft(Math.round(remaining / 1000));
-      if (newPhase === "GRADING" || newPhase === "COMPLETE") router.push("/judging");
-    },
+  const handlePhaseChange = useCallback((msg: Record<string, unknown>) => {
+    const newPhase = String(msg.state) as GamePhase;
+    setPhase(newPhase);
+    const remaining = Number(msg.remainingMs ?? 0);
+    if (remaining > 0) setSecondsLeft(Math.round(remaining / 1000));
+
+    if (newPhase === "BUILD_PHASE") {
+      setPromptLocked(true);
+      setSessionValue("gamezo_promptLocked", "1");
+    }
+    if (newPhase === "RUN_PHASE") navigate("/demo");
+    if (newPhase === "GRADING" || newPhase === "COMPLETE") navigate("/judging");
+  }, [navigate]);
+
+  const { send, connected } = useGameSocket({
+    "phase-change": handlePhaseChange,
     "sync-state": (msg) => {
-      const newPhase = String(msg["state"]) as GamePhase;
-      setPhase(newPhase);
-      const remaining = Number(msg["remainingMs"] ?? 0);
-      if (remaining > 0) setSecondsLeft(Math.round(remaining / 1000));
+      handlePhaseChange(msg);
+      if (msg.promptLocked) {
+        const locked = msg.promptLocked as { playerA: boolean; playerB: boolean };
+        const slot = yourSlot;
+        if (!slot) return;
+        const oppLocked = slot === "playerA" ? locked.playerB : locked.playerA;
+        setOpponentPromptLocked(oppLocked);
+        if (locked.playerA && locked.playerB) {
+          setPromptLocked(true);
+          setSessionValue("gamezo_promptLocked", "1");
+        }
+      }
+      if (msg.ready) {
+        const ready = msg.ready as { playerA: boolean; playerB: boolean };
+        const slot = yourSlot;
+        if (!slot) return;
+        setOpponentReady(slot === "playerA" ? ready.playerB : ready.playerA);
+        setSelfReady(slot === "playerA" ? ready.playerA : ready.playerB);
+      }
     },
-    "grade-complete": () => router.push("/judging"),
-    error: (msg) => console.error("[WS]", msg["message"]),
+    "prompt-status": (msg) => {
+      const locked = msg.promptLocked as { playerA: boolean; playerB: boolean };
+      const slot = yourSlot;
+      if (!slot) return;
+      setOpponentPromptLocked(slot === "playerA" ? locked.playerB : locked.playerA);
+    },
+    "ready-status": (msg) => {
+      const ready = msg.ready as { playerA: boolean; playerB: boolean };
+      const slot = yourSlot;
+      if (!slot) return;
+      setOpponentReady(slot === "playerA" ? ready.playerB : ready.playerA);
+      setSelfReady(slot === "playerA" ? ready.playerA : ready.playerB);
+    },
+    "grade-complete": (msg) => {
+      if (msg.judgeResult) storeJudgeResult(msg.judgeResult as Parameters<typeof storeJudgeResult>[0]);
+      navigate("/judging");
+    },
+    "rematch-start": (msg) => {
+      storeMatchFromWs(msg);
+      setPromptLocked(false);
+      setSelfPromptLocked(false);
+      setSessionValue("gamezo_promptLocked", "");
+      setOpponentPromptLocked(false);
+      setSelfReady(false);
+      setOpponentReady(false);
+      setCode("");
+      setPreview(EMPTY_PREVIEW);
+      setPhase("WAITING_PROMPTS");
+      setPrompt(String(msg.chaosSeed ?? chaosSeed));
+    },
+    "return-to-queue": () => navigate("/matchmaking"),
+    error: (msg) => {
+      const message = String(msg.message ?? "");
+      if (message.toLowerCase().includes("room not found")) {
+        clearMatchSession();
+        navigate("/matchmaking");
+        return;
+      }
+      console.error("[WS]", message);
+    },
   });
 
   useEffect(() => {
-    if (!roomId) return;
-    const timer = setTimeout(() => {
-      send({ type: "join-room", userId, roomId });
-    }, 300);
+    if (!hydrated) return;
+    if (!roomId) {
+      navigate("/matchmaking");
+      return;
+    }
+    const timer = setTimeout(() => send({ type: "join-room", userId, roomId }), 300);
     return () => clearTimeout(timer);
-  }, [roomId, send, userId]);
+  }, [hydrated, roomId, send, userId, navigate]);
 
   useEffect(() => {
-    if (phase !== "BUILD_PHASE" && phase !== "RUN_PHASE") return;
+    if (phase !== "BUILD_PHASE") return;
     if (secondsLeft <= 0) return;
-    const timer = setTimeout(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
+    const timer = setTimeout(() => setSecondsLeft((v) => Math.max(0, v - 1)), 1000);
     return () => clearTimeout(timer);
   }, [secondsLeft, phase]);
 
@@ -88,14 +171,18 @@ export function GamezoGamePage() {
   }, [aiMessages]);
 
   function lockPrompt() {
-    const locked = prompt.trim() || DEFAULT_PROMPT;
+    const locked = prompt.trim() || chaosSeed;
     setPrompt(locked);
     setAiInput(locked);
-    setPromptLocked(true);
-    setAiMessages((messages) => [
-      ...messages,
-      { role: "system", text: `Prompt locked: ${locked}` },
-    ]);
+    setSelfPromptLocked(true);
+    send({ type: "lock-prompt", userId, roomId, prompt: locked });
+    setAiMessages((m) => [...m, { role: "system", text: `Prompt locked: ${locked}. Waiting for opponent…` }]);
+    if (!connected) toast.message("Connecting to game server…");
+  }
+
+  function handleReady() {
+    setSelfReady(true);
+    send({ type: "player-ready", userId, roomId });
   }
 
   async function sendToAI() {
@@ -106,29 +193,43 @@ export function GamezoGamePage() {
     setIsGenerating(true);
     setEvalBadge(null);
     setActiveTab("Preview");
-    setAiMessages((messages) => [
-      ...messages,
-      { role: "user", text: nextPrompt },
-      { role: "assistant", text: "", isGenerating: true },
-    ]);
+    setAiMessages((m) => [...m, { role: "user", text: nextPrompt }, { role: "assistant", text: "", isGenerating: true }]);
 
     try {
       const result = await buildGameWithAi(nextPrompt, code || undefined);
       const extracted = extractHtml(result.html);
 
       if (extracted) {
-        setCode(extracted);
-        setPreview(extracted);
+        const withAssets = injectAssets(extracted, assets);
+        setCode(withAssets);
+        setPreview(withAssets);
         setEvalBadge({ total: result.total, attempts: result.attempts, chaos: result.chaos });
-        submitGameCode({ roomId, userId, html: extracted }).catch(() => {});
+        submitGameCode({ roomId, userId, html: withAssets, assets }).catch(() => {});
       }
 
-      setAiMessages((messages) => replaceGeneratingMessage(messages, describeBuildResult(Boolean(extracted), result.total, result.attempts, result.chaos)));
+      setAiMessages((m) => replaceGeneratingMessage(m, describeBuildResult(Boolean(extracted), result.total, result.attempts, result.chaos)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong";
-      setAiMessages((messages) => replaceGeneratingMessage(messages, `Error: ${message}`));
+      setAiMessages((m) => replaceGeneratingMessage(m, `Error: ${message}`));
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function handleGenerateSprite() {
+    if (isGeneratingSprite) return;
+    setIsGeneratingSprite(true);
+    try {
+      const desc = prompt.trim() || "game character sprite";
+      const sprite = await generateSprite(desc);
+      const asset: GameAsset = { dataUrl: sprite.dataUrl, description: desc };
+      setAssets((prev) => [...prev, asset]);
+      setAiInput(`${aiInput}${aiInput ? ", " : ""}use this sprite: ${sprite.dataUrl}`);
+      toast.success("Sprite generated — ask AI to add it to your game");
+    } catch {
+      toast.error("Sprite generation failed");
+    } finally {
+      setIsGeneratingSprite(false);
     }
   }
 
@@ -145,11 +246,26 @@ export function GamezoGamePage() {
     setActiveTab("AI");
   }
 
+  async function copyRoomLink() {
+    const { copyShareUrl } = await import("@/components/gamezo/game/session");
+    const ok = await copyShareUrl(roomId);
+    if (ok) toast.success("Spectator link copied!");
+    else toast.error("Could not copy link");
+  }
+
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
   const timeStr = `${minutes}:${String(seconds).padStart(2, "0")}`;
 
-  if (!promptLocked) {
+  if (!hydrated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#fffdf8] text-neutral-500">
+        Loading game…
+      </main>
+    );
+  }
+
+  if (phase === "WAITING_PROMPTS" || !promptLocked) {
     return (
       <PromptLockScreen
         prompt={prompt}
@@ -158,6 +274,13 @@ export function GamezoGamePage() {
         attachStream={attachStream}
         attachPeerStream={attachPeerStream}
         hasCamera={hasCamera}
+        hasRemoteStream={hasRemoteStream}
+        cameraError={cameraError}
+        cameraRequesting={cameraRequesting}
+        onEnableCamera={() => void requestCamera()}
+        opponentPromptLocked={opponentPromptLocked}
+        chaosSeed={chaosSeed}
+        selfPromptLocked={selfPromptLocked}
       />
     );
   }
@@ -178,14 +301,31 @@ export function GamezoGamePage() {
       attachStream={attachStream}
       attachPeerStream={attachPeerStream}
       hasCamera={hasCamera}
-      onReady={() => router.push("/judging")}
+      hasRemoteStream={hasRemoteStream}
+      cameraError={cameraError}
+      cameraRequesting={cameraRequesting}
+      onEnableCamera={() => void requestCamera()}
+      selfReady={selfReady}
+      opponentReady={opponentReady}
+      onReady={handleReady}
+      onCopyLink={copyRoomLink}
       onTabChange={setActiveTab}
       onInputChange={setAiInput}
       onSend={sendToAI}
       onReset={resetBuild}
       onFix={requestFix}
+      onGenerateSprite={handleGenerateSprite}
+      isGeneratingSprite={isGeneratingSprite}
+      assetCount={assets.length}
     />
   );
+}
+
+function injectAssets(html: string, assets: GameAsset[]): string {
+  if (!assets.length) return html;
+  const imgs = assets.map((a) => `<img src="${a.dataUrl}" alt="${a.description}" style="display:none" data-gamezo-asset />`).join("");
+  if (html.includes("</body>")) return html.replace("</body>", `${imgs}</body>`);
+  return html + imgs;
 }
 
 function extractHtml(raw: string): string | null {
@@ -198,9 +338,7 @@ function extractHtml(raw: string): string | null {
 function replaceGeneratingMessage(messages: AiMsg[], text: string): AiMsg[] {
   const updated = [...messages];
   const last = updated[updated.length - 1];
-  if (last?.isGenerating) {
-    updated[updated.length - 1] = { role: "assistant", text, isGenerating: false };
-  }
+  if (last?.isGenerating) updated[updated.length - 1] = { role: "assistant", text, isGenerating: false };
   return updated;
 }
 

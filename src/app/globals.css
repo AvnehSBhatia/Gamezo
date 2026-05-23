@@ -13,6 +13,15 @@ video[srcobject] ~ .cam-placeholder {
   display: none;
 }
 
+/* Collapse Eazo SDK wrappers so they never intercept clicks or break layout. */
+.eazo-app-area,
+.eazo-app-area-scroller {
+  display: contents !important;
+  position: static !important;
+  overflow: visible !important;
+  transform: none !important;
+}
+
 /* Gamezo is demoed directly in desktop browsers during judging. The Eazo SDK
  * still stays mounted for auth/device state, but its web-only app handoff
  * promotion must not cover the playable experience. */

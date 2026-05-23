@@ -1,10 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Geist } from "next/font/google";
-import { EazoProvider } from "@eazo/sdk/react";
 import { cn } from "@/utils/utils";
 import { Toaster } from "@/components/ui/sonner";
-import { UserSyncEffect } from "@/components/user-profile/user-sync-effect";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -62,11 +60,8 @@ export default function RootLayout({
   return (
     <html lang="en" className={cn("h-full antialiased", "font-sans", geist.variable)}>
       <body className="min-h-full flex flex-col">
-        <EazoProvider>
-          <UserSyncEffect />
-          {children}
-          <Toaster />
-        </EazoProvider>
+        {children}
+        <Toaster />
       </body>
     </html>
   );

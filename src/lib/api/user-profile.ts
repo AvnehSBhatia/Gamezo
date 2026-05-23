@@ -1,5 +1,11 @@
-import type { User } from "@eazo/sdk";
 import { request } from "./request";
+
+export interface User {
+  id: string;
+  email: string | null;
+  name: string | null;
+  avatarUrl: string | null;
+}
 
 export async function fetchUserProfile(): Promise<User | null> {
   try {

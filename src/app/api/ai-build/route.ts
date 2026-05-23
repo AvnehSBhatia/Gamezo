@@ -1,10 +1,6 @@
-import { ai } from "@eazo/sdk";
+import { aiErrorResponse } from "@/lib/ai-errors";
+import { aiChat } from "@/lib/ai/chat";
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
-
-if (process.env.EAZO_PRIVATE_KEY) {
-  ai.configure({ privateKey: process.env.EAZO_PRIVATE_KEY });
-}
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -61,7 +57,7 @@ const PASS_THRESHOLD = 28;
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function generateFull(messages: { role: "user" | "assistant" | "system"; content: string }[]): Promise<string> {
-  const result = await ai.chat({ model: MODEL, messages, stream: false });
+  const result = await aiChat({ model: MODEL, messages, stream: false });
   return (result as { choices: { message: { content: string } }[] }).choices?.[0]?.message?.content ?? "";
 }
 
@@ -151,9 +147,6 @@ async function buildWithEval(prompt: string, currentCode?: string): Promise<{
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuth(req);
-  if (!auth.ok) return auth.response;
-
   try {
     const { prompt, currentCode } = await req.json() as {
       prompt: string;
@@ -191,10 +184,6 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    console.error("[ai-build] error:", err);
-    return NextResponse.json(
-      { error: "AI generation failed — check server logs." },
-      { status: 500 }
-    );
+    return aiErrorResponse(err, "ai-build");
   }
 }

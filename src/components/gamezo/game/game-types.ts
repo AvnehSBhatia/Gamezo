@@ -4,7 +4,7 @@ export interface AiMsg {
   isGenerating?: boolean;
 }
 
-export type GamePhase = "BUILD_PHASE" | "RUN_PHASE" | "GRADING" | "COMPLETE";
+export type GamePhase = "WAITING_PROMPTS" | "BUILD_PHASE" | "RUN_PHASE" | "GRADING" | "COMPLETE";
 
 export interface EvalBadge {
   total: number;
@@ -12,7 +12,36 @@ export interface EvalBadge {
   chaos: number;
 }
 
-export interface GameSessionInfo {
+export interface JudgeScores {
+  creativity: number;
+  fun: number;
+  chaos: number;
+  uniqueness: number;
+  total: number;
+}
+
+export interface JudgeResult {
+  playerA: JudgeScores;
+  playerB: JudgeScores;
+  winner: "playerA" | "playerB";
+  commentary: string;
+}
+
+export interface MatchState {
   roomId: string;
-  userId: string;
+  phase: GamePhase;
+  chaosSeed: string;
+  playerA: string;
+  playerB: string;
+  games: { playerA: string | null; playerB: string | null };
+  prompts: { playerA: string; playerB: string };
+  judgeResult: JudgeResult | null;
+  votes: { playerA: string | null; playerB: string | null };
+  finalWinner: string | null;
+  createdAt: number;
+}
+
+export interface GameAsset {
+  dataUrl: string;
+  description: string;
 }

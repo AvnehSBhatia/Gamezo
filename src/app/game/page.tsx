@@ -1,5 +1,5 @@
-import { GamezoGamePage } from "@/components/gamezo/game";
+import { GamezoGamePageClient } from "@/components/gamezo/game/game-page-client";
 
 export default function GamePage() {
-  return <GamezoGamePage />;
+  return <GamezoGamePageClient />;
 }

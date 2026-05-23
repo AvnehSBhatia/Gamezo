@@ -8,10 +8,10 @@
  * - Negotiates offer/answer/ICE with the peer
  * - Exposes a callback ref (attachPeerStream) for the opponent <video>
  *
- * The signaling server is already running and proxied at /ws/signaling
- * on the same origin as the page.
+ * Local dev and production both use same-origin /ws/signaling via server.mjs proxy.
  */
-import { useCallback, useEffect, useRef } from "react";
+import { getGameWsUrl } from "@/lib/useGameSocket";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -22,72 +22,114 @@ interface UseWebRTCOpts {
   roomId: string;
   userId: string;
   getLocalStream: () => MediaStream | null;
-  enabled: boolean; // only start once we have a room + local stream
+  enabled: boolean;
+}
+
+function readCallerSlot(): boolean {
+  if (typeof window === "undefined") return false;
+  return sessionStorage.getItem("gamezo_yourSlot") === "playerA";
 }
 
 export function useWebRTC({ roomId, userId, getLocalStream, enabled }: UseWebRTCOpts) {
-  const pcRef      = useRef<RTCPeerConnection | null>(null);
-  const wsRef      = useRef<WebSocket | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const peerVideos = useRef<Set<HTMLVideoElement>>(new Set());
-  const isCaller   = useRef(false); // playerA initiates
+  const isCallerRef = useRef(false);
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const makingOfferRef = useRef(false);
+  const [hasRemoteStream, setHasRemoteStream] = useState(false);
 
   const attachPeerStream = useCallback((el: HTMLVideoElement | null) => {
     if (!el) return;
     peerVideos.current.add(el);
-    // If we already have a remote stream, attach it
     const pc = pcRef.current;
-    if (pc) {
-      pc.getReceivers().forEach((r) => {
-        if (r.track && r.track.kind === "video") {
-          const s = new MediaStream([r.track]);
-          el.srcObject = s;
-          el.play().catch(() => {});
-        }
-      });
-    }
+    if (!pc) return;
+    pc.getReceivers().forEach((receiver) => {
+      if (receiver.track?.kind === "video") {
+        el.srcObject = new MediaStream([receiver.track]);
+        el.play().catch(() => {});
+      }
+    });
   }, []);
 
   useEffect(() => {
     if (!enabled || !roomId || !userId) return;
 
-    // Derive WS base from current page
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsBase = `${proto}//${window.location.host}`;
-    const ws = new WebSocket(`${wsBase}/ws/signaling`);
+    let disposed = false;
+    isCallerRef.current = readCallerSlot();
+    pendingIceRef.current = [];
+
+    const ws = new WebSocket(getGameWsUrl("/ws/signaling"));
     wsRef.current = ws;
 
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
 
-    // Add local tracks once stream is available
     function addLocalTracks() {
       const stream = getLocalStream();
-      if (!stream) return;
-      stream.getTracks().forEach((track) => {
+      if (!stream) return false;
+
+      const existingTrackIds = new Set(
+        pc.getSenders().map((sender) => sender.track?.id).filter(Boolean),
+      );
+
+      let added = false;
+      for (const track of stream.getTracks()) {
+        if (existingTrackIds.has(track.id)) continue;
         pc.addTrack(track, stream);
-      });
+        added = true;
+      }
+      return added;
     }
 
-    // Handle incoming remote track → show in peer video elements
+    async function flushPendingIce() {
+      if (!pc.remoteDescription) return;
+      const pending = pendingIceRef.current.splice(0);
+      for (const candidate of pending) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.warn("[webrtc] failed to add buffered ICE candidate", err);
+        }
+      }
+    }
+
+    async function createAndSendOffer() {
+      if (!isCallerRef.current || makingOfferRef.current) return;
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (pc.signalingState !== "stable" && pc.signalingState !== "have-local-offer") return;
+
+      makingOfferRef.current = true;
+      try {
+        addLocalTracks();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: "offer", roomId, userId, sdp: offer.sdp }));
+      } catch (err) {
+        console.warn("[webrtc] offer failed", err);
+      } finally {
+        makingOfferRef.current = false;
+      }
+    }
+
     pc.ontrack = (ev) => {
       const remoteStream = ev.streams[0];
       if (!remoteStream) return;
+      setHasRemoteStream(true);
       peerVideos.current.forEach((el) => {
         el.srcObject = remoteStream;
         el.play().catch(() => {});
       });
     };
 
-    // ICE candidates → send via signaling
     pc.onicecandidate = (ev) => {
-      if (!ev.candidate) return;
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: "ice-candidate",
-          roomId, userId,
-          candidate: ev.candidate,
-        }));
-      }
+      if (!ev.candidate || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: "ice-candidate",
+        roomId,
+        userId,
+        candidate: ev.candidate.toJSON(),
+      }));
     };
 
     ws.onopen = () => {
@@ -97,60 +139,81 @@ export function useWebRTC({ roomId, userId, getLocalStream, enabled }: UseWebRTC
     ws.onmessage = async (ev) => {
       const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
 
-      if (msg["type"] === "signaling-joined") {
-        // playerA is caller (slot stored in sessionStorage)
-        const slot = sessionStorage.getItem("gamezo_yourSlot") ?? "";
-        isCaller.current = slot === "playerA";
-
+      if (msg.type === "signaling-joined") {
+        isCallerRef.current = readCallerSlot();
         addLocalTracks();
 
-        if (isCaller.current) {
-          // Short delay so playerB has time to join
-          await new Promise((r) => setTimeout(r, 800));
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          ws.send(JSON.stringify({ type: "offer", roomId, userId, sdp: offer.sdp }));
+        const peerIds = (msg.peerIds as string[] | undefined) ?? [];
+        if (isCallerRef.current && peerIds.length > 0) {
+          await createAndSendOffer();
         }
         return;
       }
 
-      if (msg["type"] === "offer") {
+      if (msg.type === "peer-joined") {
+        if (isCallerRef.current) await createAndSendOffer();
+        return;
+      }
+
+      if (msg.type === "offer") {
         addLocalTracks();
         await pc.setRemoteDescription(new RTCSessionDescription({
-          type: "offer", sdp: msg["sdp"] as string,
+          type: "offer",
+          sdp: msg.sdp as string,
         }));
+        await flushPendingIce();
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         ws.send(JSON.stringify({ type: "answer", roomId, userId, sdp: answer.sdp }));
         return;
       }
 
-      if (msg["type"] === "answer") {
+      if (msg.type === "answer") {
         await pc.setRemoteDescription(new RTCSessionDescription({
-          type: "answer", sdp: msg["sdp"] as string,
+          type: "answer",
+          sdp: msg.sdp as string,
         }));
+        await flushPendingIce();
         return;
       }
 
-      if (msg["type"] === "ice-candidate" && msg["candidate"]) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(
-            msg["candidate"] as RTCIceCandidateInit
-          ));
-        } catch {}
-        return;
+      if (msg.type === "ice-candidate" && msg.candidate) {
+        const candidate = msg.candidate as RTCIceCandidateInit;
+        if (pc.remoteDescription) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.warn("[webrtc] ICE candidate rejected", err);
+          }
+        } else {
+          pendingIceRef.current.push(candidate);
+        }
       }
     };
 
-    ws.onerror = (e) => console.warn("[webrtc] signaling error", e);
+    ws.onerror = () => {
+      if (!disposed) console.warn("[webrtc] signaling socket error");
+    };
+
+    const streamPoll = window.setInterval(() => {
+      const added = addLocalTracks();
+      if (added && isCallerRef.current && pc.signalingState === "stable") {
+        void createAndSendOffer();
+      }
+    }, 400);
 
     return () => {
+      disposed = true;
+      window.clearInterval(streamPoll);
       ws.close();
       pc.close();
-      wsRef.current  = null;
-      pcRef.current  = null;
+      wsRef.current = null;
+      pcRef.current = null;
+      pendingIceRef.current = [];
+      setHasRemoteStream(false);
     };
   }, [enabled, roomId, userId, getLocalStream]);
 
-  return { attachPeerStream };
+  return { attachPeerStream, hasRemoteStream };
 }

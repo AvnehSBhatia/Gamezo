@@ -5,83 +5,138 @@ import { LogoLockup } from "@/components/gamezo/common/logo-lockup";
 import { StatusPill } from "@/components/gamezo/common/status-pill";
 import { ChaosSeedCard } from "@/components/gamezo/matchmaking/chaos-seed-card";
 import { VersusLobby } from "@/components/gamezo/matchmaking/versus-lobby";
+import { getOrCreateUserId, storeMatchFromWs } from "@/components/gamezo/game/session";
+import type { QueueResponse } from "@/lib/api/match-queue";
+import { enqueueMatch, pollMatchStatus } from "@/lib/api/match-queue";
+import { useSafeNavigate } from "@/lib/use-safe-navigate";
 import { useGameSocket } from "@/lib/useGameSocket";
-import { Camera, Clock, Link2, Mic, ShieldCheck, UserRound } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { getOrCreateUserId } from "@/components/gamezo/game/session";
+import { Camera, Clock, Link2, Mic, ShieldCheck, UserRound, Wifi, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export function GamezoMatchmakingPage() {
-  const router = useRouter();
+  const navigate = useSafeNavigate();
+  const startedRef = useRef(false);
   const [ready, setReady] = useState(false);
+  const [opponentIsBot, setOpponentIsBot] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chaosSeed, setChaosSeed] = useState("Finding your chaos seed…");
+  const [statusLine, setStatusLine] = useState("Joining matchmaking queue…");
 
-  const { send } = useGameSocket({
-    queued: () => setError(null),
-    matched: (msg) => {
-      const roomId = String(msg["roomId"]);
-      const yourSlot = String(msg["yourSlot"]);
-      sessionStorage.setItem("gamezo_roomId", roomId);
-      sessionStorage.setItem("gamezo_yourSlot", yourSlot);
-      sessionStorage.setItem("gamezo_playerA", String(msg["playerA"]));
-      sessionStorage.setItem("gamezo_playerB", String(msg["playerB"]));
-      setReady(true);
-    },
-    "phase-change": (msg) => {
-      if (msg["state"] === "BUILD_PHASE" || msg["state"] === "ROOM_READY") router.push("/game");
-    },
-    error: (msg) => setError(String(msg["message"])),
+  const handleMatched = useCallback((msg: QueueResponse) => {
+    storeMatchFromWs(msg);
+    if (msg.chaosSeed) setChaosSeed(String(msg.chaosSeed));
+    setOpponentIsBot(Boolean(msg.opponentIsBot));
+    setReady(true);
+    setStatusLine("Opponent found!");
+    setError(null);
+  }, []);
+
+  const { send, connected } = useGameSocket({
+    matched: (msg) => handleMatched(msg as QueueResponse),
+    error: (msg) => setError(String(msg.message)),
   });
 
   useEffect(() => {
+    if (startedRef.current || ready) return;
+    startedRef.current = true;
+
     const userId = getOrCreateUserId();
-    const timer = setTimeout(() => send({ type: "enqueue", userId }), 400);
-    return () => clearTimeout(timer);
-  }, [send]);
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    async function start() {
+      try {
+        const result = await enqueueMatch(userId);
+        if (cancelled) return;
+
+        if (result.type === "matched") {
+          handleMatched(result);
+          return;
+        }
+
+        if (result.previewSeed) setChaosSeed(String(result.previewSeed));
+        setStatusLine("In queue — matching with next player or a sparring bot…");
+
+        pollTimer = setInterval(async () => {
+          try {
+            const status = await pollMatchStatus(userId);
+            if (cancelled) return;
+            if (status.type === "matched") {
+              if (pollTimer) clearInterval(pollTimer);
+              handleMatched(status);
+            }
+          } catch {
+            // keep polling
+          }
+        }, 1000);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Matchmaking failed — is the game server running? (npm run dev)",
+          );
+        }
+      }
+    }
+
+    start();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [ready, handleMatched]);
+
+  useEffect(() => {
+    if (!connected || ready) return;
+    send({ type: "enqueue", userId: getOrCreateUserId() });
+  }, [connected, ready, send]);
 
   useEffect(() => {
     if (!ready) return;
-    const timer = setTimeout(() => router.push("/game"), 900);
+    const timer = setTimeout(() => navigate("/game"), 900);
     return () => clearTimeout(timer);
-  }, [ready, router]);
+  }, [ready, navigate]);
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#fffdf8] pb-8 text-neutral-950">
       <DecorativeBackdrop />
-      <div className="relative z-10 mx-auto flex max-w-7xl items-center justify-between px-5 py-6">
+      <header className="relative z-10 mx-auto flex max-w-7xl items-center justify-between px-5 py-5">
         <LogoLockup compact />
-        <button
-          onClick={() => router.push("/")}
-          className="rounded-full border-2 border-neutral-950 bg-white px-5 py-2 text-sm font-black shadow-sm"
-        >
-          Back
-        </button>
-      </div>
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+          <StatusPill
+            icon={connected ? Wifi : WifiOff}
+            label={connected ? "Live sync on" : "Live sync connecting…"}
+            tone={connected ? "green" : "blue"}
+          />
+          <StatusPill icon={Camera} label="Camera ready" tone="green" />
+          <StatusPill icon={Mic} label="Mic ready" tone="green" />
+          <StatusPill icon={ShieldCheck} label="Anonymous" tone="blue" />
+        </div>
+      </header>
 
-      <section className="relative z-10 px-5 text-center">
-        <h1 className="text-[clamp(3.25rem,8vw,5.75rem)] font-black leading-none tracking-tight">
-          Finding opponent
+      <section className="relative z-10 mx-auto max-w-4xl px-5 pt-4 text-center">
+        <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-neutral-400">Matchmaking</p>
+        <h1 className="text-[clamp(2.5rem,7vw,4.5rem)] font-black leading-none tracking-tight">
+          {ready ? "Opponent found!" : "Finding opponent…"}
         </h1>
-        <p className="mt-4 text-sm font-black uppercase tracking-[0.18em] text-neutral-500">
-          You&apos;re anonymous. We&apos;ll pair you with someone awesome.
+        <p className="mx-auto mt-4 max-w-xl text-lg font-bold text-neutral-500">
+          {ready
+            ? opponentIsBot
+              ? "Sparring bot matched — you'll still build and demo for real."
+              : "Get ready — you'll lock prompts, then build for 5 minutes."
+            : statusLine}
         </p>
+        <div className="mx-auto mt-8 flex max-w-md flex-wrap items-center justify-center gap-4 text-sm font-black text-neutral-600">
+          <span className="flex items-center gap-2"><Clock className="h-4 w-4" /> 5 min build</span>
+          <span className="flex items-center gap-2"><UserRound className="h-4 w-4" /> 2 players</span>
+          <span className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Replay link after match</span>
+        </div>
       </section>
 
-      <VersusLobby ready={ready} />
-
-      <section className="relative z-10 mx-auto mt-7 grid w-[min(46rem,calc(100%-2rem))] gap-4 sm:grid-cols-3">
-        <StatusPill icon={Camera} label="Camera ready" tone="blue" />
-        <StatusPill icon={Mic} label="Mic ready" tone="blue" />
-        <StatusPill icon={ShieldCheck} label="No login" tone="orange" />
-      </section>
-
-      <ChaosSeedCard error={error} />
-
-      <section className="relative z-10 mx-auto mt-6 grid w-[min(46rem,calc(100%-2rem))] gap-4 sm:grid-cols-3">
-        <StatusPill icon={Clock} label="Average wait 8s" tone="blue" />
-        <StatusPill icon={UserRound} label="Anonymous" tone="blue" />
-        <StatusPill icon={Link2} label="Replay link after match" tone="orange" />
-      </section>
+      {ready ? <VersusLobby ready={ready} /> : null}
+      <ChaosSeedCard seed={chaosSeed} error={error} />
     </main>
   );
 }

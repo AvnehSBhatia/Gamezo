@@ -1,10 +1,3 @@
-import { request } from "@/lib/api/request";
-
-export interface AiBuildRequest {
-  prompt: string;
-  currentCode?: string;
-}
-
 export interface AiBuildResult {
   html: string;
   total: number;
@@ -20,7 +13,7 @@ export async function buildGameWithAi(
   prompt: string,
   currentCode?: string,
 ): Promise<AiBuildResult> {
-  const response = await request("/api/ai-build", {
+  const response = await fetch("/api/ai-build", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, currentCode }),

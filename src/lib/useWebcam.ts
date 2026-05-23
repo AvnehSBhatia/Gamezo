@@ -1,69 +1,77 @@
 "use client";
 
-/**
- * Webcam hook — returns a stable callback ref you can attach to any number
- * of <video> elements. Each element gets srcObject set immediately on mount
- * if the stream is already live, or as soon as getUserMedia resolves.
- */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export function useWebcam() {
   const streamRef = useRef<MediaStream | null>(null);
   const videosRef = useRef<Set<HTMLVideoElement>>(new Set());
   const [hasCamera, setHasCamera] = useState(false);
-  const [error,     setError]     = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [requesting, setRequesting] = useState(false);
+
+  const syncVideos = useCallback(() => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    for (const el of videosRef.current) {
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+        void el.play().catch(() => {});
+      }
+    }
+  }, []);
+
+  const requestCamera = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("Camera needs HTTPS or localhost");
+      return false;
+    }
+    if (requesting) return false;
+
+    setRequesting(true);
+    setError(null);
+
+    try {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+      syncVideos();
+      setHasCamera(true);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Camera permission denied";
+      setError(msg);
+      setHasCamera(false);
+      return false;
+    } finally {
+      setRequesting(false);
+    }
+  }, [requesting, syncVideos]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function start() {
-      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-        setError("Camera not available in this context");
-        return;
-      }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-
-        streamRef.current = stream;
-        videosRef.current.forEach((el) => {
-          el.srcObject = stream;
-          // Force play in case autoPlay didn't fire (common on mobile)
-          el.play().catch(() => {});
-        });
-        setHasCamera(true);
-      } catch (err) {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Camera unavailable";
-        setError(msg);
-        console.warn("[useWebcam]", msg);
-      }
-    }
-
-    start();
-
+    void requestCamera();
     return () => {
-      cancelled = true;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      videosRef.current.clear();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  /** Stable callback ref — attach to any <video ref={attachStream} /> */
-  const attachStream = useCallback((el: HTMLVideoElement | null) => {
-    if (!el) return;
-    videosRef.current.add(el);
-    if (streamRef.current) {
-      el.srcObject = streamRef.current;
-      el.play().catch(() => {});
-    }
-  }, []);
+  const attachStream = useCallback(
+    (el: HTMLVideoElement | null) => {
+      if (!el) return;
+      videosRef.current.add(el);
+      syncVideos();
+    },
+    [syncVideos],
+  );
 
-  /** Returns the live MediaStream (null until camera is granted) */
   const getStream = useCallback(() => streamRef.current, []);
 
-  return { attachStream, getStream, hasCamera, error };
+  return { attachStream, getStream, hasCamera, error, requesting, requestCamera };
 }

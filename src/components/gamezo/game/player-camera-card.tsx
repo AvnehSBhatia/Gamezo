@@ -1,7 +1,7 @@
 "use client";
 
 import { Camera, Mic, Signal } from "lucide-react";
-import type { RefCallback } from "react";
+import type { ReactNode, RefCallback } from "react";
 
 interface PlayerCameraCardProps {
   label: "You" | "Opponent";
@@ -9,9 +9,10 @@ interface PlayerCameraCardProps {
   videoRef?: RefCallback<HTMLVideoElement>;
   hasCamera?: boolean;
   note?: string;
+  children?: ReactNode;
 }
 
-export function PlayerCameraCard({ label, tone, videoRef, hasCamera = false, note }: PlayerCameraCardProps) {
+export function PlayerCameraCard({ label, tone, videoRef, hasCamera = false, note, children }: PlayerCameraCardProps) {
   const isBlue = tone === "blue";
 
   return (
@@ -42,14 +43,21 @@ export function PlayerCameraCard({ label, tone, videoRef, hasCamera = false, not
         }`}
       >
         {videoRef && (
-          <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 h-full w-full object-cover" />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={label === "You"}
+            className={`absolute inset-0 h-full w-full object-cover ${hasCamera ? "z-10" : "z-0"}`}
+          />
         )}
-        {!hasCamera && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-white">
+        {!hasCamera && !children && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 text-white">
             <Camera className="h-20 w-20" strokeWidth={1.7} />
-            <p className="text-xl font-black">Camera on</p>
+            <p className="text-xl font-black">{label === "You" ? "Enable camera" : "Waiting…"}</p>
           </div>
         )}
+        {children}
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2 rounded-3xl bg-white p-2 shadow-inner">
