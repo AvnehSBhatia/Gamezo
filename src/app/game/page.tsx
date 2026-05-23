@@ -1,5 +1,5 @@
-import GameScreen from "@/components/screens/GameScreen";
+import { GamezoGamePage } from "@/components/gamezo/game";
 
 export default function GamePage() {
-  return <GameScreen />;
+  return <GamezoGamePage />;
 }

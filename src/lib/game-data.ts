@@ -22,7 +22,7 @@ export const STARTER_CODE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export const TOTAL_SECONDS = 180;
+export const TOTAL_SECONDS = 300; // 5 min per spec (300s); set 180 for demo
 
 export interface ChatMsg {
   from: "system" | "you" | "opponent";

@@ -1,5 +1,5 @@
-import MatchmakingScreen from "@/components/screens/MatchmakingScreen";
+import { GamezoMatchmakingPage } from "@/components/gamezo/matchmaking";
 
 export default function MatchmakingPage() {
-  return <MatchmakingScreen />;
+  return <GamezoMatchmakingPage />;
 }

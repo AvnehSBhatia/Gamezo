@@ -1,5 +1,5 @@
-import JudgingScreen from "@/components/screens/JudgingScreen";
+import { GamezoJudgingPage } from "@/components/gamezo/judging";
 
 export default function JudgingPage() {
-  return <JudgingScreen />;
+  return <GamezoJudgingPage />;
 }

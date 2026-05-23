@@ -16,24 +16,19 @@ export interface AiBuildResult {
   verdict: string;
 }
 
-export interface GameSubmission {
-  userId: string;
-  html: string;
-  css: string;
-  js: string;
-  assets: string[];
-}
-
-export async function buildGameWithAi(params: AiBuildRequest): Promise<AiBuildResult> {
-  const res = await request("/api/ai-build", {
+export async function buildGameWithAi(
+  prompt: string,
+  currentCode?: string,
+): Promise<AiBuildResult> {
+  const response = await request("/api/ai-build", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify({ prompt, currentCode }),
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    let message = `HTTP ${res.status}`;
+  if (!response.ok) {
+    const text = await response.text();
+    let message = `HTTP ${response.status}`;
     try {
       const body = text ? (JSON.parse(text) as { error?: string }) : null;
       message = body?.error ?? message;
@@ -44,29 +39,13 @@ export async function buildGameWithAi(params: AiBuildRequest): Promise<AiBuildRe
   }
 
   return {
-    html: await res.text(),
-    total: Number(res.headers.get("X-Eval-Total") ?? 0),
-    attempts: Number(res.headers.get("X-Eval-Attempts") ?? 1),
-    playability: Number(res.headers.get("X-Eval-Playability") ?? 0),
-    completeness: Number(res.headers.get("X-Eval-Completeness") ?? 0),
-    mobile: Number(res.headers.get("X-Eval-Mobile") ?? 0),
-    chaos: Number(res.headers.get("X-Eval-Chaos") ?? 0),
-    verdict: res.headers.get("X-Eval-Verdict") ?? "pass",
+    html: await response.text(),
+    total: Number(response.headers.get("X-Eval-Total") ?? 0),
+    attempts: Number(response.headers.get("X-Eval-Attempts") ?? 1),
+    playability: Number(response.headers.get("X-Eval-Playability") ?? 0),
+    completeness: Number(response.headers.get("X-Eval-Completeness") ?? 0),
+    mobile: Number(response.headers.get("X-Eval-Mobile") ?? 0),
+    chaos: Number(response.headers.get("X-Eval-Chaos") ?? 0),
+    verdict: response.headers.get("X-Eval-Verdict") ?? "pass",
   };
-}
-
-export async function submitGameToRoom(
-  backendUrl: string,
-  roomId: string,
-  submission: GameSubmission,
-): Promise<void> {
-  const res = await fetch(`${backendUrl}/session/${roomId}/submit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(submission),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Submit failed with HTTP ${res.status}`);
-  }
 }
