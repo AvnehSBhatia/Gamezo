@@ -12,7 +12,8 @@ import next from "next";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT ?? "3000", 10);
-const gameServer = process.env.GAME_SERVER_HTTP ?? "http://localhost:3001";
+const host = process.env.HOST ?? "0.0.0.0";
+const gameServer = process.env.GAME_SERVER_HTTP ?? "http://127.0.0.1:3001";
 
 const app = next({ dev, dir: process.cwd() });
 const handle = app.getRequestHandler();
@@ -44,7 +45,7 @@ app.prepare().then(() => {
     handleUpgrade(req, socket, head);
   });
 
-  server.listen(port, () => {
-    console.log(`> Ready on http://localhost:${port} (WS proxy → ${gameServer})`);
+  server.listen(port, host, () => {
+    console.log(`> Ready on http://${host}:${port} (WS proxy → ${gameServer})`);
   });
 });

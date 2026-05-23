@@ -3,6 +3,7 @@
 import { DecorativeBackdrop } from "@/components/gamezo/common/decorative-backdrop";
 import { LogoLockup } from "@/components/gamezo/common/logo-lockup";
 import { JudgeScoreCard } from "@/components/gamezo/judging/judge-score-card";
+import { JudgingPlayPanel } from "@/components/gamezo/judging/judging-play-panel";
 import type { JudgeResult } from "@/components/gamezo/game/game-types";
 import {
   clearMatchSession,
@@ -41,6 +42,10 @@ export function GamezoJudgingPage() {
     playerB: null,
   });
   const [rematchCount, setRematchCount] = useState(0);
+  const [games, setGames] = useState<{ playerA: string | null; playerB: string | null }>({
+    playerA: null,
+    playerB: null,
+  });
 
   const { send } = useGameSocket({
     "grade-complete": (msg) => {
@@ -76,6 +81,7 @@ export function GamezoJudgingPage() {
     send({ type: "join-room", userId, roomId });
 
     getMatchState(roomId).then((state) => {
+      if (state?.games) setGames(state.games);
       if (state?.judgeResult) {
         setJudgeResult(state.judgeResult);
         storeJudgeResult(state.judgeResult);
@@ -203,6 +209,11 @@ export function GamezoJudgingPage() {
           </div>
           <JudgeScoreCard title="Opponent" tone="orange" categories={opponentScores} animate={animate} />
         </div>
+
+        <JudgingPlayPanel
+          opponentHtml={yourSlot === "playerA" ? games.playerB : games.playerA}
+          yourHtml={yourSlot === "playerA" ? games.playerA : games.playerB}
+        />
 
         {animate && !peerVote && judgeResult && (
           <div className="mt-7 rounded-[2rem] border-2 border-neutral-950 bg-white p-5 text-center shadow-lg">

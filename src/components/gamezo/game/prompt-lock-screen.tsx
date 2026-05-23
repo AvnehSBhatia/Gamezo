@@ -19,6 +19,9 @@ interface PromptLockScreenProps {
   cameraError?: string | null;
   cameraRequesting?: boolean;
   onEnableCamera?: () => void;
+  hasMic?: boolean;
+  micEnabled?: boolean;
+  onToggleMic?: () => void;
   opponentPromptLocked: boolean;
   chaosSeed: string;
   selfPromptLocked: boolean;
@@ -35,6 +38,9 @@ export function PromptLockScreen({
   cameraError = null,
   cameraRequesting = false,
   onEnableCamera,
+  hasMic = false,
+  micEnabled = true,
+  onToggleMic,
   opponentPromptLocked,
   chaosSeed,
   selfPromptLocked,
@@ -58,7 +64,16 @@ export function PromptLockScreen({
       </header>
 
       <section className="relative z-10 mx-0 grid w-full max-w-none items-start gap-5 lg:mx-auto lg:max-w-7xl lg:grid-cols-[22rem_1fr_22rem]">
-        <PlayerCameraCard label="You" tone="blue" videoRef={attachStream} hasCamera={hasCamera}>
+        <PlayerCameraCard
+          label="You"
+          tone="blue"
+          videoRef={attachStream}
+          hasCamera={hasCamera}
+          hasMic={hasMic}
+          micEnabled={micEnabled}
+          onToggleMic={onToggleMic}
+          onEnableCamera={onEnableCamera}
+        >
           {onEnableCamera && (
             <CameraEnableButton
               attachStream={attachStream}

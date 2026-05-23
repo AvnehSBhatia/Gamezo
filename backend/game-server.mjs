@@ -10,7 +10,15 @@ const PORT = parseInt(process.env.GAME_SERVER_PORT ?? "3001", 10);
 const BUILD_MS = 5 * 60 * 1000;
 const DEMO_MS = 30 * 1000;
 const BOT_MATCH_MS = 5000;
-const JUDGE_URL = process.env.JUDGE_URL ?? "http://localhost:3000/api/ai-judge";
+
+function trimTrailingSlash(value) {
+  return value.replace(/\/$/, "");
+}
+
+const appBase = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
+const JUDGE_URL =
+  process.env.JUDGE_URL ??
+  (appBase ? `${trimTrailingSlash(appBase)}/api/ai-judge` : "http://127.0.0.1:3000/api/ai-judge");
 
 /** @type {Map<string, { ws: import('ws').WebSocket, userId: string }>} */
 const queue = new Map();
@@ -445,7 +453,8 @@ function handleGameMessage(ws, msg) {
   if (type === "demo-input") {
     if (room.phase !== "RUN_PHASE") return;
     const demoSlot = room.demoIndex === 0 ? "playerA" : "playerB";
-    if (slot !== demoSlot) return;
+    const playingSlot = demoSlot === "playerA" ? "playerB" : "playerA";
+    if (slot !== playingSlot) return;
     broadcastRoom(room, { type: "demo-input", event: msg.event }, userId);
     return;
   }
@@ -583,7 +592,8 @@ function handleHttp(req, res) {
     return;
   }
 
-  const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
+  const host = req.headers.host ?? `127.0.0.1:${PORT}`;
+  const url = new URL(req.url ?? "/", `http://${host}`);
 
   if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -735,6 +745,8 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[game-server] listening on http://localhost:${PORT}`);
+const HOST = process.env.HOST ?? "0.0.0.0";
+
+server.listen(PORT, HOST, () => {
+  console.log(`[game-server] listening on http://${HOST}:${PORT}`);
 });

@@ -4,16 +4,11 @@ import { Geist } from "next/font/google";
 import { cn } from "@/utils/utils";
 import { Toaster } from "@/components/ui/sonner";
 
+import { getPublicAppUrl } from "@/lib/game-server-url";
+
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
-// Public origin used to resolve relative URLs in OG / Twitter Card tags
-// and `canonical`. Picks up Vercel's auto-injected hostname; on other
-// hosts (or when using a custom domain whose OG should not show the
-// `*.vercel.app` URL), point `metadataBase` at the canonical URL
-// directly instead of relying on this.
-const SITE_URL = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : undefined;
+const SITE_URL = getPublicAppUrl();
 
 const SITE_TITLE = "Gamezo";
 const SITE_DESCRIPTION =

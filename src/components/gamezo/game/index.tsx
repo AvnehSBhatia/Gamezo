@@ -13,6 +13,7 @@ import {
 import { buildGameWithAi, generateSprite, storeJudgeResult, submitGameCode } from "@/lib/api";
 import type { GameAsset } from "@/components/gamezo/game/game-types";
 import { pickChaosSeed } from "@/lib/chaos-seeds";
+import { DEFAULT_GAME_HTML } from "@/lib/game-html";
 import { TOTAL_SECONDS } from "@/lib/game-data";
 import { useMatchSession } from "@/lib/use-match-session";
 import { useSafeNavigate } from "@/lib/use-safe-navigate";
@@ -50,19 +51,19 @@ export function GamezoGamePage() {
   const [evalBadge, setEvalBadge] = useState<EvalBadge | null>(null);
   const [activeTab, setActiveTab] = useState<"AI" | "Preview" | "Code" | "Players">("AI");
   const [aiMessages, setAiMessages] = useState<AiMsg[]>([]);
+  const [previewVersion, setPreviewVersion] = useState(0);
 
   useEffect(() => {
     if (!hydrated) return;
     const seed = getSessionValue("gamezo_chaosSeed", pickChaosSeed());
     setChaosSeed(seed);
     setPrompt(seed);
-    setPromptLocked(getSessionValue("gamezo_promptLocked") === "1");
     setAiMessages([
       { role: "system", text: `Chaos seed: "${seed}". Lock your prompt, then ask the AI builder to generate a playable one-file game.` },
     ]);
   }, [hydrated]);
 
-  const { attachStream, getStream, hasCamera, error: cameraError, requesting: cameraRequesting, requestCamera } = useWebcam();
+  const { attachStream, getStream, hasCamera, hasMic, micEnabled, toggleMic, error: cameraError, requesting: cameraRequesting, requestCamera } = useWebcam();
   const { attachPeerStream, hasRemoteStream } = useWebRTC({
     roomId,
     userId,
@@ -88,6 +89,11 @@ export function GamezoGamePage() {
     "phase-change": handlePhaseChange,
     "sync-state": (msg) => {
       handlePhaseChange(msg);
+      const serverPhase = String(msg.state ?? "");
+      if (serverPhase === "BUILD_PHASE" || serverPhase === "RUN_PHASE" || serverPhase === "GRADING" || serverPhase === "COMPLETE") {
+        setPromptLocked(true);
+        setSessionValue("gamezo_promptLocked", "1");
+      }
       if (msg.promptLocked) {
         const locked = msg.promptLocked as { playerA: boolean; playerB: boolean };
         const slot = yourSlot;
@@ -112,6 +118,10 @@ export function GamezoGamePage() {
       const slot = yourSlot;
       if (!slot) return;
       setOpponentPromptLocked(slot === "playerA" ? locked.playerB : locked.playerA);
+      if (locked.playerA && locked.playerB) {
+        setPromptLocked(true);
+        setSessionValue("gamezo_promptLocked", "1");
+      }
     },
     "ready-status": (msg) => {
       const ready = msg.ready as { playerA: boolean; playerB: boolean };
@@ -185,8 +195,8 @@ export function GamezoGamePage() {
     send({ type: "player-ready", userId, roomId });
   }
 
-  async function sendToAI() {
-    const nextPrompt = aiInput.trim();
+  async function sendToAI(overridePrompt?: string) {
+    const nextPrompt = (overridePrompt ?? aiInput).trim();
     if (!nextPrompt || isGenerating) return;
 
     setAiInput("");
@@ -203,6 +213,7 @@ export function GamezoGamePage() {
         const withAssets = injectAssets(extracted, assets);
         setCode(withAssets);
         setPreview(withAssets);
+        setPreviewVersion((v) => v + 1);
         setEvalBadge({ total: result.total, attempts: result.attempts, chaos: result.chaos });
         submitGameCode({ roomId, userId, html: withAssets, assets }).catch(() => {});
       }
@@ -236,14 +247,29 @@ export function GamezoGamePage() {
   function resetBuild() {
     setCode("");
     setPreview(EMPTY_PREVIEW);
+    setPreviewVersion((v) => v + 1);
     setEvalBadge(null);
     setAiInput(prompt);
     setActiveTab("AI");
   }
 
+  function handleCodeChange(next: string) {
+    setCode(next);
+  }
+
+  function runPreview() {
+    const html = code.trim() || DEFAULT_GAME_HTML;
+    setPreview(html);
+    setPreviewVersion((v) => v + 1);
+    setActiveTab("Preview");
+    submitGameCode({ roomId, userId, html, assets }).catch(() => {});
+    toast.success("Preview updated");
+  }
+
   function requestFix() {
-    setAiInput("Fix bugs, improve mobile controls, and make the objective clearer.");
+    const fixPrompt = "Fix bugs, improve mobile controls, and make the objective clearer.";
     setActiveTab("AI");
+    void sendToAI(fixPrompt);
   }
 
   async function copyRoomLink() {
@@ -265,7 +291,7 @@ export function GamezoGamePage() {
     );
   }
 
-  if (phase === "WAITING_PROMPTS" || !promptLocked) {
+  if (phase === "WAITING_PROMPTS") {
     return (
       <PromptLockScreen
         prompt={prompt}
@@ -278,6 +304,9 @@ export function GamezoGamePage() {
         cameraError={cameraError}
         cameraRequesting={cameraRequesting}
         onEnableCamera={() => void requestCamera()}
+        hasMic={hasMic}
+        micEnabled={micEnabled}
+        onToggleMic={toggleMic}
         opponentPromptLocked={opponentPromptLocked}
         chaosSeed={chaosSeed}
         selfPromptLocked={selfPromptLocked}
@@ -305,18 +334,24 @@ export function GamezoGamePage() {
       cameraError={cameraError}
       cameraRequesting={cameraRequesting}
       onEnableCamera={() => void requestCamera()}
+      hasMic={hasMic}
+      micEnabled={micEnabled}
+      onToggleMic={toggleMic}
       selfReady={selfReady}
       opponentReady={opponentReady}
       onReady={handleReady}
       onCopyLink={copyRoomLink}
       onTabChange={setActiveTab}
       onInputChange={setAiInput}
-      onSend={sendToAI}
+      onSend={() => void sendToAI()}
       onReset={resetBuild}
       onFix={requestFix}
       onGenerateSprite={handleGenerateSprite}
       isGeneratingSprite={isGeneratingSprite}
-      assetCount={assets.length}
+      assets={assets}
+      onCodeChange={handleCodeChange}
+      onRun={runPreview}
+      previewVersion={previewVersion}
     />
   );
 }

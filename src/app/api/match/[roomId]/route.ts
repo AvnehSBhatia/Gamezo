@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const BACKEND = process.env.GAME_SERVER_HTTP ?? "http://localhost:3001";
+import { getGameServerHttpBase } from "@/lib/server/game-server-backend";
 
 export async function GET(
   _req: NextRequest,
@@ -8,7 +7,7 @@ export async function GET(
 ) {
   const { roomId } = await params;
   try {
-    const res = await fetch(`${BACKEND}/session/${roomId}`, { cache: "no-store" });
+    const res = await fetch(`${getGameServerHttpBase()}/session/${roomId}`, { cache: "no-store" });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {
@@ -23,7 +22,7 @@ export async function POST(
   const { roomId } = await params;
   try {
     const body = await req.json();
-    const res = await fetch(`${BACKEND}/session/${roomId}/submit`, {
+    const res = await fetch(`${getGameServerHttpBase()}/session/${roomId}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

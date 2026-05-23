@@ -1,23 +1,20 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback } from "react";
 
 export function useSafeNavigate() {
   const router = useRouter();
-  const readyRef = useRef(false);
 
-  useEffect(() => {
-    readyRef.current = true;
-  }, []);
-
-  const push = useCallback(
+  return useCallback(
     (href: string) => {
-      if (!readyRef.current) return;
-      queueMicrotask(() => router.push(href));
+      if (typeof window === "undefined") return;
+      try {
+        router.push(href);
+      } catch {
+        window.location.assign(href);
+      }
     },
     [router],
   );
-
-  return push;
 }

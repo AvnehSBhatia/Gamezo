@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const BACKEND = process.env.GAME_SERVER_HTTP ?? "http://localhost:3001";
+import { getGameServerHttpBase } from "@/lib/server/game-server-backend";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const res = await fetch(`${BACKEND}/queue/enqueue`, {
+    const res = await fetch(`${getGameServerHttpBase()}/queue/enqueue`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -26,7 +25,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
   }
   try {
-    const res = await fetch(`${BACKEND}/queue/status?userId=${encodeURIComponent(userId)}`, {
+    const res = await fetch(`${getGameServerHttpBase()}/queue/status?userId=${encodeURIComponent(userId)}`, {
       cache: "no-store",
     });
     const data = await res.json();

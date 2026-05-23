@@ -1,15 +1,14 @@
 "use client";
 
+import type { GameWsPath } from "@/lib/game-server-url";
+import { getGameWsUrl as resolveGameWsUrl } from "@/lib/game-server-url";
 import { useEffect, useRef, useCallback, useState } from "react";
 
 export type WsMessage = Record<string, unknown> & { type: string };
 type Handler = (msg: WsMessage) => void;
 
-export function getGameWsUrl(path: "/ws/game" | "/ws/signaling"): string {
-  if (typeof window === "undefined") return `ws://localhost:3000${path}`;
-
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}${path}`;
+export function getGameWsUrl(path: GameWsPath): string {
+  return resolveGameWsUrl(path);
 }
 
 export function useGameSocket(handlers: Record<string, Handler>) {

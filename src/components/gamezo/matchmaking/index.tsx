@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export function GamezoMatchmakingPage() {
   const navigate = useSafeNavigate();
   const startedRef = useRef(false);
+  const [mounted, setMounted] = useState(false);
   const [ready, setReady] = useState(false);
   const [opponentIsBot, setOpponentIsBot] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +38,11 @@ export function GamezoMatchmakingPage() {
   });
 
   useEffect(() => {
-    if (startedRef.current || ready) return;
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted || startedRef.current || ready) return;
     startedRef.current = true;
 
     const userId = getOrCreateUserId();
@@ -86,18 +91,30 @@ export function GamezoMatchmakingPage() {
       cancelled = true;
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [ready, handleMatched]);
+  }, [mounted, ready, handleMatched]);
 
   useEffect(() => {
-    if (!connected || ready) return;
+    if (!mounted || !connected || ready) return;
     send({ type: "enqueue", userId: getOrCreateUserId() });
-  }, [connected, ready, send]);
+  }, [mounted, connected, ready, send]);
 
   useEffect(() => {
     if (!ready) return;
     const timer = setTimeout(() => navigate("/game"), 900);
     return () => clearTimeout(timer);
   }, [ready, navigate]);
+
+  if (!mounted) {
+    return (
+      <main className="relative min-h-screen overflow-hidden bg-[#fffdf8] pb-8 text-neutral-950">
+        <DecorativeBackdrop />
+        <section className="relative z-10 mx-auto max-w-4xl px-5 pt-24 text-center">
+          <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-neutral-400">Matchmaking</p>
+          <h1 className="text-[clamp(2.5rem,7vw,4.5rem)] font-black leading-none tracking-tight">Finding opponent…</h1>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#fffdf8] pb-8 text-neutral-950">

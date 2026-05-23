@@ -2,7 +2,7 @@
 
 import { AiBuilderPanel } from "@/components/gamezo/game/ai-builder-panel";
 import { CodeToolsPanel } from "@/components/gamezo/game/code-tools-panel";
-import type { AiMsg, EvalBadge } from "@/components/gamezo/game/game-types";
+import type { AiMsg, EvalBadge, GameAsset } from "@/components/gamezo/game/game-types";
 import { LivePreviewPanel } from "@/components/gamezo/game/live-preview-panel";
 import { VideoRail } from "@/components/gamezo/game/video-rail";
 import type { RefCallback, RefObject } from "react";
@@ -24,13 +24,19 @@ interface MobileGameTabsProps {
   cameraError?: string | null;
   cameraRequesting?: boolean;
   onEnableCamera?: () => void;
+  hasMic?: boolean;
+  micEnabled?: boolean;
+  onToggleMic?: () => void;
   onInputChange: (value: string) => void;
   onSend: () => void;
   onReset: () => void;
   onFix: () => void;
   onGenerateSprite: () => void;
   isGeneratingSprite: boolean;
-  assetCount: number;
+  assets: GameAsset[];
+  onCodeChange: (code: string) => void;
+  onRun: () => void;
+  previewVersion: number;
 }
 
 export function MobileGameTabs({
@@ -50,19 +56,26 @@ export function MobileGameTabs({
   cameraError = null,
   cameraRequesting = false,
   onEnableCamera,
+  hasMic = false,
+  micEnabled = true,
+  onToggleMic,
   onInputChange,
   onSend,
   onReset,
   onFix,
   onGenerateSprite,
   isGeneratingSprite,
-  assetCount,
+  assets,
+  onCodeChange,
+  onRun,
+  previewVersion,
 }: MobileGameTabsProps) {
   return (
     <div className="px-4 pb-5 lg:hidden">
       <div className="mb-3 grid grid-cols-4 gap-2 rounded-2xl border-2 border-neutral-950 bg-white p-2">
         {(["AI", "Preview", "Code", "Players"] as const).map((tab) => (
           <button
+            type="button"
             key={tab}
             onClick={() => onTabChange(tab)}
             className={`rounded-xl px-2 py-3 text-sm font-black ${activeTab === tab ? "bg-blue-600 text-white" : "bg-neutral-50 text-neutral-600"}`}
@@ -88,16 +101,26 @@ export function MobileGameTabs({
           />
         </div>
       )}
-      {activeTab === "Preview" && <LivePreviewPanel preview={preview} evalBadge={evalBadge} isGenerating={isGenerating} />}
+      {activeTab === "Preview" && (
+        <LivePreviewPanel
+          preview={preview}
+          previewVersion={previewVersion}
+          evalBadge={evalBadge}
+          isGenerating={isGenerating}
+          onRun={onRun}
+        />
+      )}
       {activeTab === "Code" && (
         <CodeToolsPanel
           code={code}
           evalBadge={evalBadge}
+          assets={assets}
+          onCodeChange={onCodeChange}
+          onRun={onRun}
           onReset={onReset}
           onFix={onFix}
           onGenerateSprite={onGenerateSprite}
           isGeneratingSprite={isGeneratingSprite}
-          assetCount={assetCount}
         />
       )}
       {activeTab === "Players" && (
@@ -109,6 +132,9 @@ export function MobileGameTabs({
           cameraError={cameraError}
           cameraRequesting={cameraRequesting}
           onEnableCamera={onEnableCamera}
+          hasMic={hasMic}
+          micEnabled={micEnabled}
+          onToggleMic={onToggleMic}
         />
       )}
     </div>

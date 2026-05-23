@@ -1,8 +1,9 @@
 "use client";
 
-import { Camera, Mic, UserRound } from "lucide-react";
+import { Camera, UserRound } from "lucide-react";
 import type { RefCallback } from "react";
 import { CameraEnableButton } from "@/components/gamezo/game/camera-enable-button";
+import { MediaControlButton } from "@/components/gamezo/game/media-control-button";
 
 interface VideoRailProps {
   attachStream: RefCallback<HTMLVideoElement>;
@@ -12,6 +13,9 @@ interface VideoRailProps {
   cameraError?: string | null;
   cameraRequesting?: boolean;
   onEnableCamera?: () => void;
+  hasMic?: boolean;
+  micEnabled?: boolean;
+  onToggleMic?: () => void;
 }
 
 export function VideoRail({
@@ -22,9 +26,12 @@ export function VideoRail({
   cameraError = null,
   cameraRequesting = false,
   onEnableCamera,
+  hasMic = false,
+  micEnabled = true,
+  onToggleMic,
 }: VideoRailProps) {
   return (
-    <aside className="flex flex-col gap-3 rounded-[1.5rem] border-2 border-neutral-950 bg-white p-3">
+    <aside className="relative z-10 flex h-full flex-col gap-3 rounded-[1.5rem] border-2 border-neutral-950 bg-white p-3">
       <div className="rounded-2xl border border-neutral-200 p-2">
         <span className="rounded-full bg-blue-600 px-3 py-1 text-sm font-black text-white">You</span>
         <div className="relative mt-2 aspect-[4/3] overflow-hidden rounded-xl bg-neutral-100">
@@ -43,13 +50,19 @@ export function VideoRail({
               <UserRound className="h-24 w-24" />
             </div>
           )}
-          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
-              <Mic className="h-5 w-5" />
-            </span>
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
-              <Camera className="h-5 w-5" />
-            </span>
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 gap-3">
+            <MediaControlButton
+              label="Mic"
+              enabled={hasMic}
+              active={micEnabled}
+              onClick={() => onToggleMic?.()}
+            />
+            <MediaControlButton
+              label="Camera"
+              enabled={hasCamera}
+              active={hasCamera}
+              onClick={() => onEnableCamera?.()}
+            />
           </div>
         </div>
       </div>
@@ -64,14 +77,6 @@ export function VideoRail({
             </div>
           )}
           <div className="absolute right-3 top-3 h-3 w-3 rounded-full bg-green-500" />
-          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
-              <Mic className="h-5 w-5" />
-            </span>
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-md">
-              <Camera className="h-5 w-5" />
-            </span>
-          </div>
         </div>
       </div>
 
