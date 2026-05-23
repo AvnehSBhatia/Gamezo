@@ -1,5 +1,10 @@
 import { ai } from "@eazo/sdk";
 import { NextRequest, NextResponse } from "next/server";
+import { requireAuth } from "@/lib/auth";
+
+if (process.env.EAZO_PRIVATE_KEY) {
+  ai.configure({ privateKey: process.env.EAZO_PRIVATE_KEY });
+}
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -146,6 +151,9 @@ async function buildWithEval(prompt: string, currentCode?: string): Promise<{
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const auth = requireAuth(req);
+  if (!auth.ok) return auth.response;
+
   try {
     const { prompt, currentCode } = await req.json() as {
       prompt: string;
@@ -176,8 +184,10 @@ export async function POST(req: NextRequest) {
         "X-Eval-Verdict":     evalResult!.verdict,
         "X-Eval-Attempts":    String(attempts),
         "X-Eval-Playability": String(evalResult!.playability),
+        "X-Eval-Completeness": String(evalResult!.completeness),
+        "X-Eval-Mobile":      String(evalResult!.mobile),
         "X-Eval-Chaos":       String(evalResult!.chaos),
-        "Access-Control-Expose-Headers": "X-Eval-Total,X-Eval-Verdict,X-Eval-Attempts,X-Eval-Playability,X-Eval-Chaos",
+        "Access-Control-Expose-Headers": "X-Eval-Total,X-Eval-Verdict,X-Eval-Attempts,X-Eval-Playability,X-Eval-Completeness,X-Eval-Mobile,X-Eval-Chaos",
       },
     });
   } catch (err) {

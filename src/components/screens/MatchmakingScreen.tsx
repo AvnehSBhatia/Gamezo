@@ -22,7 +22,7 @@ export default function MatchmakingScreen() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { send } = useGameSocket({
+  const { send, connected } = useGameSocket({
     queued: () => {
       // Just stay on searching — no fake steps
     },
@@ -56,6 +56,28 @@ export default function MatchmakingScreen() {
     return () => clearTimeout(t);
   }, [send]);
 
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => {
+      if (connected || ready) return;
+      const userId = getUserId();
+      const info = {
+        roomId: "demo-room",
+        yourSlot: "demo",
+        playerA: userId,
+        playerB: "demo-opponent",
+      };
+      setRoomInfo(info);
+      setReady(true);
+      sessionStorage.setItem("gamezo_roomId", info.roomId);
+      sessionStorage.setItem("gamezo_yourSlot", info.yourSlot);
+      sessionStorage.setItem("gamezo_playerA", info.playerA);
+      sessionStorage.setItem("gamezo_playerB", info.playerB);
+      sessionStorage.setItem("gamezo_demo_mode", "true");
+    }, 2400);
+    return () => clearTimeout(t);
+  }, [connected, ready]);
+
   return (
     <div className="min-h-screen bg-[#FFFAF4] flex flex-col items-center justify-center relative overflow-x-hidden font-sans px-6">
       <img src={ASSETS.blueBlobVertical}   alt="" className="absolute -top-10 -left-16 w-64 opacity-30 pointer-events-none" />
@@ -83,6 +105,11 @@ export default function MatchmakingScreen() {
             <p className="text-neutral-500 text-base text-center max-w-xs">
               Matching you with the best stranger on the internet
             </p>
+            {!connected && (
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                Demo fallback starts automatically
+              </p>
+            )}
             {error && (
               <div className="mt-6 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 text-center">
                 {error}
@@ -110,7 +137,9 @@ export default function MatchmakingScreen() {
               </div>
             </div>
             <p className="text-neutral-500 text-sm text-center mb-6">
-              Lock in — battle starts now
+              {roomInfo?.roomId === "demo-room"
+                ? "Demo mode — build your game without waiting on the live server"
+                : "Lock in — battle starts now"}
             </p>
             <button onClick={() => router.push("/game")} className="w-full hover:scale-[1.03] active:scale-[0.97] transition-transform">
               <img src={ASSETS.buttonStartMatch} alt="Start match" className="w-full object-contain drop-shadow-xl" />
