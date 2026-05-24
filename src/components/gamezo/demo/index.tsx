@@ -5,7 +5,7 @@ import { LogoLockup } from "@/components/gamezo/common/logo-lockup";
 import { DemoGamePanel } from "@/components/gamezo/demo/demo-game-panel";
 import { DemoTopBar } from "@/components/gamezo/demo/demo-top-bar";
 import { PlayerCameraCard } from "@/components/gamezo/game/player-camera-card";
-import { storeMatchFromWs } from "@/components/gamezo/game/session";
+import { clearMatchSession, storeMatchFromWs } from "@/components/gamezo/game/session";
 import type { GamePhase } from "@/components/gamezo/game/game-types";
 import { getMatchState, storeJudgeResult } from "@/lib/api/game-submission";
 import {
@@ -111,6 +111,7 @@ export function GamezoDemoPage() {
       navigate("/game");
     },
     "return-to-queue": () => {
+      clearMatchSession();
       navigate("/matchmaking");
     },
     error: (msg) => console.error("[demo-ws]", msg.message),

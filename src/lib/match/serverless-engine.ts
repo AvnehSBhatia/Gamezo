@@ -9,6 +9,8 @@ import {
   MAX_HTML_BYTES,
   STALE_GRADING_MS,
   createRoomState,
+  isLegacyBotRoom,
+  isReusableMatchRoom,
 } from "@/lib/match/types";
 import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 
@@ -42,16 +44,28 @@ async function loadRoom(roomId: string) {
   return { id: row.id, state: row.state as MatchRoomState, version: row.version };
 }
 
-async function findRoomByUser(userId: string) {
+async function findReusableRoomByUser(userId: string) {
   const rows = await db
     .select()
     .from(matchRooms)
-    .where(or(eq(matchRooms.playerA, userId), eq(matchRooms.playerB, userId)))
-    .limit(1);
-  return rows[0] ?? null;
+    .where(or(eq(matchRooms.playerA, userId), eq(matchRooms.playerB, userId)));
+  const legacyRoomIds: string[] = [];
+  for (const row of rows) {
+    const state = row.state as MatchRoomState;
+    if (isLegacyBotRoom(state)) {
+      legacyRoomIds.push(row.id);
+      continue;
+    }
+    if (isReusableMatchRoom(state)) return row;
+  }
+  if (legacyRoomIds.length) {
+    await db.transaction(async (tx) => {
+      await tx.delete(matchEvents).where(inArray(matchEvents.roomId, legacyRoomIds));
+      await tx.delete(matchRooms).where(inArray(matchRooms.id, legacyRoomIds));
+    });
+  }
+  return null;
 }
-// findRoomByUser is still used by serverlessQueueStatus (a read-only fast path
-// that doesn't need the enqueue lock).
 
 /**
  * Load → mutate → CAS-save with bounded retries. The CAS UPDATE and the
@@ -296,11 +310,21 @@ export async function serverlessEnqueue(userId: string) {
     const existingRows = await tx
       .select()
       .from(matchRooms)
-      .where(or(eq(matchRooms.playerA, userId), eq(matchRooms.playerB, userId)))
-      .limit(1);
-    if (existingRows.length) {
-      const existing = existingRows[0]!;
-      return matchedPayload(existing.id, existing.state as MatchRoomState, userId);
+      .where(or(eq(matchRooms.playerA, userId), eq(matchRooms.playerB, userId)));
+    const legacyRoomIds: string[] = [];
+    for (const existing of existingRows) {
+      const state = existing.state as MatchRoomState;
+      if (isLegacyBotRoom(state)) {
+        legacyRoomIds.push(existing.id);
+        continue;
+      }
+      if (isReusableMatchRoom(state)) {
+        return matchedPayload(existing.id, state, userId);
+      }
+    }
+    if (legacyRoomIds.length) {
+      await tx.delete(matchEvents).where(inArray(matchEvents.roomId, legacyRoomIds));
+      await tx.delete(matchRooms).where(inArray(matchRooms.id, legacyRoomIds));
     }
 
     await tx.delete(matchQueue).where(eq(matchQueue.userId, userId));
@@ -329,7 +353,7 @@ export async function serverlessEnqueue(userId: string) {
 }
 
 export async function serverlessQueueStatus(userId: string) {
-  const roomRow = await findRoomByUser(userId);
+  const roomRow = await findReusableRoomByUser(userId);
   if (roomRow) {
     return matchedPayload(roomRow.id, roomRow.state as MatchRoomState, userId);
   }
@@ -452,6 +476,19 @@ export async function serverlessAction(msg: Record<string, unknown>) {
       const player = slot === "playerA" ? state.playerA : state.playerB;
       player.vote = voteFor;
       push({ type: "vote-update", votes: { playerA: state.playerA.vote, playerB: state.playerB.vote } });
+    });
+    return { ok: mutation.ok };
+  }
+
+  if (type === "find-new") {
+    const mutation = await mutateRoom(roomId, (state, push) => {
+      state.phase = "COMPLETE";
+      state.judgeResult = { abandoned: true };
+      state.rematchRequests = [];
+      state.buildEndsAt = null;
+      state.demoEndsAt = null;
+      state.gradingStartedAt = null;
+      push({ type: "return-to-queue" });
     });
     return { ok: mutation.ok };
   }
