@@ -1,0 +1,14 @@
+# Deploy the real-time game server (matchmaking + WebSockets).
+# Frontend stays on Vercel; point GAME_SERVER_HTTP + NEXT_PUBLIC_GAME_SERVER_URL here.
+#
+# Railway: New Project → Deploy from GitHub → set root service start command below.
+# Set APP_URL=https://gamezo-gilt.vercel.app (your Vercel URL) on this service.
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "node backend/game-server.mjs"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"

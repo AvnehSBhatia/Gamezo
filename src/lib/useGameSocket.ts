@@ -11,7 +11,7 @@ export function getGameWsUrl(path: GameWsPath): string {
   return resolveGameWsUrl(path);
 }
 
-export function useGameSocket(handlers: Record<string, Handler>) {
+export function useGameSocket(handlers: Record<string, Handler>, enabled = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef(handlers);
   const queueRef = useRef<WsMessage[]>([]);
@@ -22,6 +22,11 @@ export function useGameSocket(handlers: Record<string, Handler>) {
   }, [handlers]);
 
   useEffect(() => {
+    if (!enabled) {
+      setConnected(false);
+      return;
+    }
+
     let alive = true;
     let ws: WebSocket;
 
@@ -69,7 +74,7 @@ export function useGameSocket(handlers: Record<string, Handler>) {
       queueRef.current = [];
       wsRef.current?.close();
     };
-  }, []);
+  }, [enabled]);
 
   const send = useCallback((msg: WsMessage): boolean => {
     const ws = wsRef.current;

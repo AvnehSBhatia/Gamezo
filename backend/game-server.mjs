@@ -6,7 +6,7 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import { pickChaosSeed } from "./chaos-seeds.mjs";
 
-const PORT = parseInt(process.env.GAME_SERVER_PORT ?? "3001", 10);
+const PORT = parseInt(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? "3001", 10);
 const BUILD_MS = 5 * 60 * 1000;
 const DEMO_MS = 30 * 1000;
 const BOT_MATCH_MS = 5000;

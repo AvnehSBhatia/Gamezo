@@ -12,7 +12,7 @@ import {
 } from "@/components/gamezo/game/session";
 import { getMatchState, loadJudgeResult, storeJudgeResult } from "@/lib/api/game-submission";
 import { useMatchSession } from "@/lib/use-match-session";
-import { useGameSocket } from "@/lib/useGameSocket";
+import { useMatchTransport } from "@/lib/useMatchTransport";
 import { Bot, Copy, Heart, Home, RefreshCw, Trophy, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -47,7 +47,7 @@ export function GamezoJudgingPage() {
     playerB: null,
   });
 
-  const { send } = useGameSocket({
+  const { send } = useMatchTransport({
     "grade-complete": (msg) => {
       if (msg.judgeResult) {
         const jr = msg.judgeResult as JudgeResult;

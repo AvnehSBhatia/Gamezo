@@ -9,7 +9,7 @@ import { getOrCreateUserId, storeMatchFromWs } from "@/components/gamezo/game/se
 import type { QueueResponse } from "@/lib/api/match-queue";
 import { enqueueMatch, pollMatchStatus } from "@/lib/api/match-queue";
 import { useSafeNavigate } from "@/lib/use-safe-navigate";
-import { useGameSocket } from "@/lib/useGameSocket";
+import { useMatchTransport } from "@/lib/useMatchTransport";
 import { Camera, Clock, Link2, Mic, ShieldCheck, UserRound, Wifi, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -32,7 +32,7 @@ export function GamezoMatchmakingPage() {
     setError(null);
   }, []);
 
-  const { send, connected } = useGameSocket({
+  const { send, connected, mode } = useMatchTransport({
     matched: (msg) => handleMatched(msg as QueueResponse),
     error: (msg) => setError(String(msg.message)),
   });
@@ -94,9 +94,9 @@ export function GamezoMatchmakingPage() {
   }, [mounted, ready, handleMatched]);
 
   useEffect(() => {
-    if (!mounted || !connected || ready) return;
+    if (!mounted || !connected || ready || mode === "polling") return;
     send({ type: "enqueue", userId: getOrCreateUserId() });
-  }, [mounted, connected, ready, send]);
+  }, [mounted, connected, ready, send, mode]);
 
   useEffect(() => {
     if (!ready) return;

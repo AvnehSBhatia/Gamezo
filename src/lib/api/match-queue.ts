@@ -10,7 +10,18 @@ export type QueueResponse = WsMessage & {
   playerB?: string;
   chaosSeed?: string;
   opponentIsBot?: boolean;
+  error?: string;
 };
+
+async function readQueueError(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    if (body.error) return body.error;
+  } catch {
+    // ignore
+  }
+  return `Matchmaking failed (${res.status})`;
+}
 
 export async function enqueueMatch(userId: string): Promise<QueueResponse> {
   const res = await fetch("/api/match/queue", {
@@ -18,7 +29,7 @@ export async function enqueueMatch(userId: string): Promise<QueueResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ userId }),
   });
-  if (!res.ok) throw new Error(`Enqueue failed (${res.status})`);
+  if (!res.ok) throw new Error(await readQueueError(res));
   return res.json() as Promise<QueueResponse>;
 }
 
@@ -26,6 +37,6 @@ export async function pollMatchStatus(userId: string): Promise<QueueResponse> {
   const res = await fetch(`/api/match/queue?userId=${encodeURIComponent(userId)}`, {
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Poll failed (${res.status})`);
+  if (!res.ok) throw new Error(await readQueueError(res));
   return res.json() as Promise<QueueResponse>;
 }

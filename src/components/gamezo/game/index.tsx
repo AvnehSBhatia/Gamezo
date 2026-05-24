@@ -17,7 +17,7 @@ import { DEFAULT_GAME_HTML } from "@/lib/game-html";
 import { TOTAL_SECONDS } from "@/lib/game-data";
 import { useMatchSession } from "@/lib/use-match-session";
 import { useSafeNavigate } from "@/lib/use-safe-navigate";
-import { useGameSocket } from "@/lib/useGameSocket";
+import { useMatchTransport } from "@/lib/useMatchTransport";
 import { useWebcam } from "@/lib/useWebcam";
 import { useWebRTC } from "@/lib/useWebRTC";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -85,7 +85,7 @@ export function GamezoGamePage() {
     if (newPhase === "GRADING" || newPhase === "COMPLETE") navigate("/judging");
   }, [navigate]);
 
-  const { send, connected } = useGameSocket({
+  const { send, connected } = useMatchTransport({
     "phase-change": handlePhaseChange,
     "sync-state": (msg) => {
       handlePhaseChange(msg);

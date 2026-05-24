@@ -5,7 +5,7 @@ import { LogoLockup } from "@/components/gamezo/common/logo-lockup";
 import { JudgeScoreCard } from "@/components/gamezo/judging/judge-score-card";
 import type { JudgeResult, MatchState } from "@/components/gamezo/game/game-types";
 import { getMatchState } from "@/lib/api/game-submission";
-import { useGameSocket } from "@/lib/useGameSocket";
+import { useMatchTransport } from "@/lib/useMatchTransport";
 import { Bot, Home, Play } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -33,7 +33,7 @@ export function GamezoSpectatorPage({ roomId }: SpectatorPageProps) {
     setLoading(false);
   }, [roomId]);
 
-  const { send } = useGameSocket({
+  const { send } = useMatchTransport({
     "spectator-joined": (msg) => {
       setMatch(parseSpectatorMsg(msg));
       setLoading(false);

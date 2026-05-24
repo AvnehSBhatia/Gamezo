@@ -1,0 +1,20 @@
+# One-click full-stack deploy — Next.js + game server + WebSocket proxy.
+# Alternative to Vercel + separate Railway game server.
+# https://render.com → New Blueprint → connect repo
+services:
+  - type: web
+    name: gamezo
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health/game-server
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: EAZO_PRIVATE_KEY
+        sync: false
+      - key: EAZO_APP_ID
+        sync: false

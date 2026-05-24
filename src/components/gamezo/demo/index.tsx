@@ -17,7 +17,7 @@ import {
 } from "@/lib/demo-input-relay";
 import { useMatchSession } from "@/lib/use-match-session";
 import { useSafeNavigate } from "@/lib/use-safe-navigate";
-import { useGameSocket } from "@/lib/useGameSocket";
+import { useMatchTransport } from "@/lib/useMatchTransport";
 import { useWebcam } from "@/lib/useWebcam";
 import { useWebRTC } from "@/lib/useWebRTC";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -86,7 +86,7 @@ export function GamezoDemoPage() {
     [loadDemoHtml, navigate],
   );
 
-  const { send } = useGameSocket({
+  const { send } = useMatchTransport({
     "phase-change": handlePhase,
     "sync-state": (msg) => {
       handlePhase(msg);
