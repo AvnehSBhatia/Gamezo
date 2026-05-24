@@ -4,6 +4,7 @@ import { DecorativeBackdrop } from "@/components/gamezo/common/decorative-backdr
 import { LogoLockup } from "@/components/gamezo/common/logo-lockup";
 import { StatusPill } from "@/components/gamezo/common/status-pill";
 import { ChaosSeedCard } from "@/components/gamezo/matchmaking/chaos-seed-card";
+import { FindingOpponentLoader } from "@/components/gamezo/matchmaking/finding-opponent-loader";
 import { VersusLobby } from "@/components/gamezo/matchmaking/versus-lobby";
 import { getOrCreateUserId, storeMatchFromWs } from "@/components/gamezo/game/session";
 import type { QueueResponse } from "@/lib/api/match-queue";
@@ -16,9 +17,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export function GamezoMatchmakingPage() {
   const navigate = useSafeNavigate();
   const startedRef = useRef(false);
-  const [mounted, setMounted] = useState(false);
   const [ready, setReady] = useState(false);
-  const [opponentIsBot, setOpponentIsBot] = useState(false);
+  const [inviteHintVisible, setInviteHintVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chaosSeed, setChaosSeed] = useState("Finding your chaos seed…");
   const [statusLine, setStatusLine] = useState("Joining matchmaking queue…");
@@ -26,8 +26,8 @@ export function GamezoMatchmakingPage() {
   const handleMatched = useCallback((msg: QueueResponse) => {
     storeMatchFromWs(msg);
     if (msg.chaosSeed) setChaosSeed(String(msg.chaosSeed));
-    setOpponentIsBot(Boolean(msg.opponentIsBot));
     setReady(true);
+    setInviteHintVisible(false);
     setStatusLine("Opponent found!");
     setError(null);
   }, []);
@@ -38,19 +38,21 @@ export function GamezoMatchmakingPage() {
   });
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (!mounted || startedRef.current || ready) return;
+    if (startedRef.current || ready) return;
     startedRef.current = true;
 
     const userId = getOrCreateUserId();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let inviteHintTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
 
     async function start() {
       try {
+        setInviteHintVisible(false);
+        inviteHintTimer = setTimeout(() => {
+          if (!cancelled) setInviteHintVisible(true);
+        }, 3000);
+
         const result = await enqueueMatch(userId);
         if (cancelled) return;
 
@@ -60,7 +62,7 @@ export function GamezoMatchmakingPage() {
         }
 
         if (result.previewSeed) setChaosSeed(String(result.previewSeed));
-        setStatusLine("In queue — matching with next player or a sparring bot…");
+        setStatusLine("In queue — matching with the next available player…");
 
         pollTimer = setInterval(async () => {
           try {
@@ -75,6 +77,7 @@ export function GamezoMatchmakingPage() {
           }
         }, 1000);
       } catch (err) {
+        if (inviteHintTimer) clearTimeout(inviteHintTimer);
         if (!cancelled) {
           setError(
             err instanceof Error
@@ -89,32 +92,21 @@ export function GamezoMatchmakingPage() {
 
     return () => {
       cancelled = true;
+      if (inviteHintTimer) clearTimeout(inviteHintTimer);
       if (pollTimer) clearInterval(pollTimer);
     };
-  }, [mounted, ready, handleMatched]);
+  }, [ready, handleMatched]);
 
   useEffect(() => {
-    if (!mounted || !connected || ready || mode === "polling") return;
+    if (!connected || ready || mode === "polling") return;
     send({ type: "enqueue", userId: getOrCreateUserId() });
-  }, [mounted, connected, ready, send, mode]);
+  }, [connected, ready, send, mode]);
 
   useEffect(() => {
     if (!ready) return;
     const timer = setTimeout(() => navigate("/game"), 900);
     return () => clearTimeout(timer);
   }, [ready, navigate]);
-
-  if (!mounted) {
-    return (
-      <main className="relative min-h-screen overflow-hidden bg-[#fffdf8] pb-8 text-neutral-950">
-        <DecorativeBackdrop />
-        <section className="relative z-10 mx-auto max-w-4xl px-5 pt-24 text-center">
-          <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-neutral-400">Matchmaking</p>
-          <h1 className="text-[clamp(2.5rem,7vw,4.5rem)] font-black leading-none tracking-tight">Finding opponent…</h1>
-        </section>
-      </main>
-    );
-  }
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#fffdf8] pb-8 text-neutral-950">
@@ -136,13 +128,13 @@ export function GamezoMatchmakingPage() {
       <section className="relative z-10 mx-auto max-w-4xl px-5 pt-4 text-center">
         <p className="mb-3 text-sm font-black uppercase tracking-[0.2em] text-neutral-400">Matchmaking</p>
         <h1 className="text-[clamp(2.5rem,7vw,4.5rem)] font-black leading-none tracking-tight">
-          {ready ? "Opponent found!" : "Finding opponent…"}
+          {ready ? "Opponent found!" : <FindingOpponentLoader />}
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-lg font-bold text-neutral-500">
           {ready
-            ? opponentIsBot
-              ? "Sparring bot matched — you'll still build and demo for real."
-              : "Get ready — you'll lock prompts, then build for 5 minutes."
+            ? "Get ready — you'll lock prompts, then build for 5 minutes."
+            : inviteHintVisible
+              ? "Hmm doesn't look like anybody's available. You should invite a friend."
             : statusLine}
         </p>
         <div className="mx-auto mt-8 flex max-w-md flex-wrap items-center justify-center gap-4 text-sm font-black text-neutral-600">
