@@ -1,5 +1,6 @@
 import { aiErrorResponse } from "@/lib/ai-errors";
 import { aiChat } from "@/lib/ai/chat";
+import { guardAiRequest } from "@/lib/ai/guard";
 import { NextRequest, NextResponse } from "next/server";
 
 const MODEL = "deepseek.v3.1";
@@ -18,6 +19,9 @@ Rules:
 - dataUrl is base64-encoded SVG for use in <img src>`;
 
 export async function POST(req: NextRequest) {
+  const rejected = guardAiRequest(req, { capacity: 15, refillPerSec: 0.25 });
+  if (rejected) return rejected;
+
   try {
     const { description } = (await req.json()) as { description?: string };
     if (!description?.trim()) {

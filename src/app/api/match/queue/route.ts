@@ -4,7 +4,12 @@ import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
 import { matchEnqueue, matchQueueStatus } from "@/lib/match/match-engine";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  let body: { userId?: unknown } & Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
   if (usePollingMatchBackend()) {
     try {

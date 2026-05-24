@@ -9,14 +9,22 @@ export type AuthResult =
   | { ok: true; user: User }
   | { ok: false; response: Response };
 
-/** Anonymous Gamezo — auth is not used; always rejects missing session. */
+/**
+ * Gamezo runs anonymous-direct — there is no login, no session, no identity
+ * verification. Every request is accepted. Clients that want stable per-user
+ * features (MCP tool scoping, profile upserts) may pass an opaque local
+ * identifier via the `x-user-id` header; nothing about it is trusted, it's
+ * purely a client-chosen handle.
+ */
 export function requireAuth(request: Request): AuthResult {
-  void request;
+  const headerId = request.headers.get("x-user-id")?.trim();
   return {
-    ok: false,
-    response: new Response(JSON.stringify({ error: "Authentication is not enabled" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    }),
+    ok: true,
+    user: {
+      id: headerId && headerId.length > 0 ? headerId : "anonymous",
+      email: null,
+      name: null,
+      avatarUrl: null,
+    },
   };
 }

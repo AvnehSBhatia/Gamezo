@@ -22,6 +22,13 @@ export interface MatchRoomState {
   judgeResult: unknown | null;
   rematchRequests: string[];
   botLockAt: number | null;
+  /** Wall-clock at which any still-unlocked prompts get force-locked so a
+   *  stalled or disconnected player can't wedge the room indefinitely. */
+  waitingPromptsTimeoutAt: number | null;
+  /** Wall-clock when this room first transitioned to GRADING. Used to detect
+   *  a Vercel-function kill between "phase=GRADING" CAS and judge completion;
+   *  if a poll arrives more than STALE_GRADING_MS later, the judge is retried. */
+  gradingStartedAt: number | null;
 }
 
 export function createPlayer(userId: string, isBot = false): MatchPlayer {
@@ -49,9 +56,16 @@ export function createRoomState(playerAId: string, playerBId: string, isBotB: bo
     judgeResult: null,
     rematchRequests: [],
     botLockAt: null,
+    waitingPromptsTimeoutAt: Date.now() + WAITING_PROMPTS_TIMEOUT_MS,
+    gradingStartedAt: null,
   };
 }
 
 export const BUILD_MS = 5 * 60 * 1000;
 export const DEMO_MS = 30 * 1000;
 export const BOT_MATCH_MS = 5000;
+export const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
+export const MAX_HTML_BYTES = 256 * 1024;
+/** A room sitting in GRADING longer than this is presumed stuck (Vercel
+ *  function killed mid-judge). Next poller retries the judge. */
+export const STALE_GRADING_MS = 30 * 1000;

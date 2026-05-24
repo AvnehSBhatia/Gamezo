@@ -1,7 +1,8 @@
 import { pickChaosSeed } from "@/lib/chaos-seeds";
+import { judgeMatch, fallbackJudge as judgeFallback } from "@/lib/ai/judge";
 import { getMemoryStore } from "@/lib/match/memory-store";
 import type { MatchRoomState } from "@/lib/match/types";
-import { BOT_MATCH_MS, BUILD_MS, DEMO_MS, createRoomState } from "@/lib/match/types";
+import { BOT_MATCH_MS, BUILD_MS, DEMO_MS, MAX_HTML_BYTES, STALE_GRADING_MS, createRoomState } from "@/lib/match/types";
 
 function genRoomId() {
   return `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -96,6 +97,19 @@ function fallbackHtml(userId: string) {
 async function advanceTimers(roomId: string, state: MatchRoomState) {
   const now = Date.now();
 
+  // Stale-grading recovery: same defensive check as in serverless-engine.
+  if (
+    state.phase === "GRADING" &&
+    state.gradingStartedAt &&
+    now - state.gradingStartedAt >= STALE_GRADING_MS
+  ) {
+    console.warn(`[memory-engine] stale GRADING detected (${now - state.gradingStartedAt}ms), retrying judge`);
+    state.gradingStartedAt = now;
+    saveRoom(roomId, state);
+    await runJudge(roomId, state);
+    return;
+  }
+
   if (state.phase === "WAITING_PROMPTS" && state.botLockAt && now >= state.botLockAt) {
     const bot = state.playerA.isBot ? state.playerA : state.playerB.isBot ? state.playerB : null;
     if (bot && !bot.promptLocked) {
@@ -107,6 +121,27 @@ async function advanceTimers(roomId: string, state: MatchRoomState) {
       });
     }
     state.botLockAt = null;
+  }
+
+  // Force-lock any still-unlocked prompts once the WAITING_PROMPTS timeout
+  // expires so a stalled or disconnected player can't wedge the room.
+  if (state.phase === "WAITING_PROMPTS" && state.waitingPromptsTimeoutAt && now >= state.waitingPromptsTimeoutAt) {
+    let changed = false;
+    for (const p of [state.playerA, state.playerB]) {
+      if (!p.promptLocked) {
+        p.promptLocked = true;
+        if (!p.prompt) p.prompt = pickChaosSeed();
+        changed = true;
+      }
+    }
+    if (changed) {
+      pushEvent(roomId, {
+        type: "prompt-status",
+        reason: "timeout",
+        promptLocked: { playerA: state.playerA.promptLocked, playerB: state.playerB.promptLocked },
+      });
+    }
+    state.waitingPromptsTimeoutAt = null;
   }
 
   if (state.phase === "WAITING_PROMPTS" && state.playerA.promptLocked && state.playerB.promptLocked) {
@@ -131,6 +166,7 @@ async function advanceTimers(roomId: string, state: MatchRoomState) {
       pushDemoPhase(roomId, state);
     } else {
       state.phase = "GRADING";
+      state.gradingStartedAt = now;
       pushEvent(roomId, { type: "phase-change", state: "GRADING" });
       await runJudge(roomId, state);
     }
@@ -155,20 +191,14 @@ function pushDemoPhase(roomId: string, state: MatchRoomState) {
 async function runJudge(roomId: string, state: MatchRoomState) {
   let judgeResult: unknown;
   try {
-    const base = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? process.env.VERCEL_URL;
-    const origin = base?.startsWith("http") ? base : base ? `https://${base}` : "http://127.0.0.1:3000";
-    const res = await fetch(`${origin.replace(/\/$/, "")}/api/ai-judge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        roomId,
-        playerA: { html: state.playerA.html, prompt: state.playerA.prompt },
-        playerB: { html: state.playerB.html, prompt: state.playerB.prompt },
-      }),
+    // Direct in-process call — see serverless-engine for rationale.
+    judgeResult = await judgeMatch({
+      roomId,
+      playerA: { html: state.playerA.html, prompt: state.playerA.prompt },
+      playerB: { html: state.playerB.html, prompt: state.playerB.prompt },
     });
-    judgeResult = res.ok ? await res.json() : fallbackJudge();
   } catch {
-    judgeResult = fallbackJudge();
+    judgeResult = judgeFallback(state.playerA.html, state.playerB.html);
   }
   state.judgeResult = judgeResult;
   state.phase = "COMPLETE";
@@ -179,16 +209,6 @@ async function runJudge(roomId: string, state: MatchRoomState) {
     votes: { playerA: state.playerA.vote, playerB: state.playerB.vote },
     shareUrl: `/watch/${roomId}`,
   });
-}
-
-function fallbackJudge() {
-  const score = () => ({ creativity: 6, fun: 6, chaos: 6, uniqueness: 6, total: 24 });
-  return {
-    playerA: score(),
-    playerB: score(),
-    winner: "playerA",
-    commentary: "Fallback scores — AI judge unavailable.",
-  };
 }
 
 export async function memoryEnqueue(userId: string) {
@@ -352,6 +372,9 @@ export async function memoryGetPublicRoom(roomId: string) {
 }
 
 export async function memorySubmitCode(roomId: string, userId: string, html: string, assets: unknown[]) {
+  if (html.length > MAX_HTML_BYTES) {
+    return { error: `Submission too large (${html.length} bytes, max ${MAX_HTML_BYTES})` };
+  }
   const room = loadRoom(roomId);
   if (!room) return { error: "Room not found" };
   const slot = getSlot(room.state, userId);

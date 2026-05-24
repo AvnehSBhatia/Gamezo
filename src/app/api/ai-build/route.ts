@@ -1,5 +1,6 @@
 import { aiErrorResponse } from "@/lib/ai-errors";
 import { aiChat } from "@/lib/ai/chat";
+import { guardAiRequest } from "@/lib/ai/guard";
 import { NextRequest, NextResponse } from "next/server";
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
@@ -147,6 +148,9 @@ async function buildWithEval(prompt: string, currentCode?: string): Promise<{
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const rejected = guardAiRequest(req, { capacity: 10, refillPerSec: 0.1 });
+  if (rejected) return rejected;
+
   try {
     const { prompt, currentCode } = await req.json() as {
       prompt: string;

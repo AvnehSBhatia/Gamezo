@@ -10,6 +10,8 @@ const PORT = parseInt(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? "3001"
 const BUILD_MS = 5 * 60 * 1000;
 const DEMO_MS = 30 * 1000;
 const BOT_MATCH_MS = 5000;
+const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
+const MAX_HTML_BYTES = 256 * 1024;
 
 function trimTrailingSlash(value) {
   return value.replace(/\/$/, "");
@@ -77,7 +79,33 @@ function createRoom(playerAId, playerBId) {
   rooms.set(id, room);
   userRoom.set(playerAId, id);
   userRoom.set(playerBId, id);
+  scheduleWaitingPromptsTimeout(room);
   return room;
+}
+
+function scheduleWaitingPromptsTimeout(room) {
+  if (room._waitingPromptsTimer) clearTimeout(room._waitingPromptsTimer);
+  room._waitingPromptsTimer = setTimeout(() => {
+    if (room.phase !== "WAITING_PROMPTS") return;
+    let changed = false;
+    for (const p of [room.playerA, room.playerB]) {
+      if (!p.promptLocked) {
+        p.promptLocked = true;
+        if (!p.prompt) p.prompt = pickChaosSeed();
+        changed = true;
+      }
+    }
+    if (changed) {
+      broadcastRoom(room, {
+        type: "prompt-status",
+        reason: "timeout",
+        promptLocked: { playerA: room.playerA.promptLocked, playerB: room.playerB.promptLocked },
+      });
+    }
+    if (room.playerA.promptLocked && room.playerB.promptLocked && room.phase === "WAITING_PROMPTS") {
+      startBuildPhase(room);
+    }
+  }, WAITING_PROMPTS_TIMEOUT_MS);
 }
 
 function getSlot(room, userId) {
@@ -253,6 +281,10 @@ function roomSnapshot(room, forUserId) {
 }
 
 function startBuildPhase(room) {
+  if (room._waitingPromptsTimer) {
+    clearTimeout(room._waitingPromptsTimer);
+    room._waitingPromptsTimer = null;
+  }
   room.phase = "BUILD_PHASE";
   room.buildEndsAt = Date.now() + BUILD_MS;
   room.playerA.ready = false;
@@ -482,6 +514,7 @@ function handleGameMessage(ws, msg) {
   }
 
   if (type === "find-new") {
+    clearRoomTimers(room);
     for (const p of [room.playerA, room.playerB]) {
       userRoom.delete(p.userId);
       send(p.ws, { type: "return-to-queue" });
@@ -492,7 +525,26 @@ function handleGameMessage(ws, msg) {
   }
 }
 
+function clearRoomTimers(room) {
+  if (room._waitingPromptsTimer) {
+    clearTimeout(room._waitingPromptsTimer);
+    room._waitingPromptsTimer = null;
+  }
+  if (room._buildTimer) {
+    clearTimeout(room._buildTimer);
+    room._buildTimer = null;
+  }
+  if (room._demoTimer) {
+    clearTimeout(room._demoTimer);
+    room._demoTimer = null;
+  }
+}
+
 function resetRoomForRematch(room) {
+  // Cancel any pending build/demo/waiting timers from the previous match
+  // before re-arming the new WAITING_PROMPTS timeout — otherwise a stray
+  // timer could fire against the reset room.
+  clearRoomTimers(room);
   room.phase = "WAITING_PROMPTS";
   room.buildEndsAt = null;
   room.demoIndex = 0;
@@ -508,6 +560,7 @@ function resetRoomForRematch(room) {
     p.assets = [];
     p.vote = null;
   }
+  scheduleWaitingPromptsTimeout(room);
   broadcastRoom(room, {
     type: "rematch-start",
     chaosSeed: room.chaosSeed,
@@ -657,8 +710,21 @@ function handleHttp(req, res) {
   const submitMatch = url.pathname.match(/^\/session\/([^/]+)\/submit$/);
   if (req.method === "POST" && submitMatch) {
     let body = "";
-    req.on("data", (c) => { body += c; });
+    let aborted = false;
+    req.on("data", (c) => {
+      if (aborted) return;
+      body += c;
+      if (body.length > MAX_HTML_BYTES + 4096) {
+        aborted = true;
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Body too large (max ${MAX_HTML_BYTES} bytes)` }));
+        // No req.destroy() — emits a socket error that lands in the
+        // uncaughtException handler. The `aborted` flag prevents the
+        // end-callback parser from running; that's enough.
+      }
+    });
     req.on("end", () => {
+      if (aborted) return;
       try {
         const data = JSON.parse(body);
         const room = rooms.get(submitMatch[1]);
@@ -673,8 +739,14 @@ function handleHttp(req, res) {
           res.end(JSON.stringify({ error: "Not in room" }));
           return;
         }
+        const html = String(data.html ?? "");
+        if (html.length > MAX_HTML_BYTES) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Submission too large (max ${MAX_HTML_BYTES} bytes)` }));
+          return;
+        }
         const player = getPlayer(room, slot);
-        player.html = String(data.html ?? "");
+        player.html = html;
         if (Array.isArray(data.assets)) player.assets = data.assets;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
@@ -746,6 +818,21 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 const HOST = process.env.HOST ?? "0.0.0.0";
+
+/**
+ * Log and exit on unhandled errors. Continuing past one is anti-pattern for a
+ * stateful in-process server (Node docs are explicit); the process may have
+ * left a room mid-phase-transition and silently broken. Exit so a supervisor
+ * restarts and clients reconnect, instead of silently wedging matches.
+ */
+process.on("uncaughtException", (err) => {
+  console.error("[game-server] uncaughtException, exiting:", err?.stack ?? err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[game-server] unhandledRejection, exiting:", reason);
+  process.exit(1);
+});
 
 server.listen(PORT, HOST, () => {
   console.log(`[game-server] listening on http://${HOST}:${PORT}`);

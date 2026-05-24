@@ -3,6 +3,8 @@ import { getGameServerHttpBase } from "@/lib/server/game-server-backend";
 import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
 import { matchGetPublicRoom, matchSubmitCode } from "@/lib/match/match-engine";
 
+const MAX_HTML_BYTES = 256 * 1024;
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ roomId: string }> },
@@ -33,14 +35,27 @@ export async function POST(
   { params }: { params: Promise<{ roomId: string }> },
 ) {
   const { roomId } = await params;
-  const body = await req.json();
+  let body: { userId?: unknown; html?: unknown; assets?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const html = String(body.html ?? "");
+  if (html.length > MAX_HTML_BYTES) {
+    return NextResponse.json(
+      { error: `Submission too large (${html.length} bytes, max ${MAX_HTML_BYTES})` },
+      { status: 413 },
+    );
+  }
 
   if (usePollingMatchBackend()) {
     try {
       const data = await matchSubmitCode(
         roomId,
         String(body.userId ?? ""),
-        String(body.html ?? ""),
+        html,
         Array.isArray(body.assets) ? body.assets : [],
       );
       const status = data.error ? 404 : 200;
