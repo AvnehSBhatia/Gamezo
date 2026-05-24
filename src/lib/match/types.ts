@@ -61,6 +61,18 @@ export function createRoomState(playerAId: string, playerBId: string, isBotB: bo
   };
 }
 
+export function isBotPlayer(player: MatchPlayer): boolean {
+  return player.isBot || player.userId.startsWith("bot_");
+}
+
+export function isLegacyBotRoom(state: MatchRoomState): boolean {
+  return isBotPlayer(state.playerA) || isBotPlayer(state.playerB);
+}
+
+export function isReusableMatchRoom(state: MatchRoomState): boolean {
+  return !isLegacyBotRoom(state) && state.phase !== "COMPLETE";
+}
+
 export const BUILD_MS = 60 * 1000;
 export const DEMO_MS = 30 * 1000;
 export const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;

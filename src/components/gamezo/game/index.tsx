@@ -147,7 +147,10 @@ export function GamezoGamePage() {
       setPhase("WAITING_PROMPTS");
       setPrompt(String(msg.chaosSeed ?? chaosSeed));
     },
-    "return-to-queue": () => navigate("/matchmaking"),
+    "return-to-queue": () => {
+      clearMatchSession();
+      navigate("/matchmaking");
+    },
     error: (msg) => {
       const message = String(msg.message ?? "");
       if (message.toLowerCase().includes("room not found")) {

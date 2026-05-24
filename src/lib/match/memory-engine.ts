@@ -2,7 +2,15 @@ import { pickChaosSeed } from "@/lib/chaos-seeds";
 import { judgeMatch, fallbackJudge as judgeFallback } from "@/lib/ai/judge";
 import { getMemoryStore } from "@/lib/match/memory-store";
 import type { MatchRoomState } from "@/lib/match/types";
-import { BUILD_MS, DEMO_MS, MAX_HTML_BYTES, STALE_GRADING_MS, createRoomState } from "@/lib/match/types";
+import {
+  BUILD_MS,
+  DEMO_MS,
+  MAX_HTML_BYTES,
+  STALE_GRADING_MS,
+  createRoomState,
+  isLegacyBotRoom,
+  isReusableMatchRoom,
+} from "@/lib/match/types";
 
 function genRoomId() {
   return `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -47,6 +55,28 @@ function findRoomByUser(userId: string) {
   const state = store.rooms.get(roomId);
   if (!state) return null;
   return { id: roomId, state };
+}
+
+function removeRoom(roomId: string, state: MatchRoomState) {
+  const store = getMemoryStore();
+  store.rooms.delete(roomId);
+  store.events.delete(roomId);
+  for (const player of [state.playerA, state.playerB]) {
+    if (store.userRoom.get(player.userId) === roomId) {
+      store.userRoom.delete(player.userId);
+    }
+  }
+}
+
+function findReusableRoomByUser(userId: string) {
+  const room = findRoomByUser(userId);
+  if (!room) return null;
+  if (isLegacyBotRoom(room.state)) {
+    removeRoom(room.id, room.state);
+    return null;
+  }
+  if (!isReusableMatchRoom(room.state)) return null;
+  return room;
 }
 
 function saveRoom(roomId: string, state: MatchRoomState) {
@@ -213,7 +243,7 @@ async function runJudge(roomId: string, state: MatchRoomState) {
 
 export async function memoryEnqueue(userId: string) {
   const store = getMemoryStore();
-  const existing = findRoomByUser(userId);
+  const existing = findReusableRoomByUser(userId);
   if (existing) return matchedPayload(existing.id, existing.state, userId);
 
   store.queue.delete(userId);
@@ -237,7 +267,7 @@ export async function memoryEnqueue(userId: string) {
 }
 
 export async function memoryQueueStatus(userId: string) {
-  const roomRow = findRoomByUser(userId);
+  const roomRow = findReusableRoomByUser(userId);
   if (roomRow) return matchedPayload(roomRow.id, roomRow.state, userId);
 
   const inQueue = getMemoryStore().queue.get(userId);
@@ -333,6 +363,23 @@ export async function memoryAction(msg: Record<string, unknown>) {
       saveRoom(roomId, state);
       pushEvent(roomId, { type: "vote-update", votes: { playerA: state.playerA.vote, playerB: state.playerB.vote } });
     }
+    return { ok: true };
+  }
+
+  if (type === "find-new") {
+    state.phase = "COMPLETE";
+    state.judgeResult = { abandoned: true };
+    state.rematchRequests = [];
+    state.buildEndsAt = null;
+    state.demoEndsAt = null;
+    state.gradingStartedAt = null;
+    saveRoom(roomId, state);
+    for (const p of [state.playerA, state.playerB]) {
+      if (getMemoryStore().userRoom.get(p.userId) === roomId) {
+        getMemoryStore().userRoom.delete(p.userId);
+      }
+    }
+    pushEvent(roomId, { type: "return-to-queue" });
     return { ok: true };
   }
 
