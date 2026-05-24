@@ -1,4 +1,4 @@
-import seeds from "../shared/chaos-seeds.json" with { type: "json" };
+import seeds from "./chaos-seeds.json" with { type: "json" };
 
 export const CHAOS_SEEDS = seeds;
 
