@@ -9,7 +9,6 @@ import { pickChaosSeed } from "./chaos-seeds.mjs";
 const PORT = parseInt(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? "3001", 10);
 const BUILD_MS = 60 * 1000;
 const DEMO_MS = 30 * 1000;
-const BOT_MATCH_MS = 5000;
 const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
 const MAX_HTML_BYTES = 256 * 1024;
 
@@ -24,9 +23,6 @@ const JUDGE_URL =
 
 /** @type {Map<string, { ws: import('ws').WebSocket, userId: string }>} */
 const queue = new Map();
-
-/** @type {Map<string, ReturnType<typeof setTimeout>>} */
-const botTimers = new Map();
 
 /** @type {Map<string, object>} */
 const pendingMatches = new Map();
@@ -122,15 +118,8 @@ function getOpponent(room, slot) {
   return slot === "playerA" ? room.playerB : room.playerA;
 }
 
-function clearBotTimer(userId) {
-  const timer = botTimers.get(userId);
-  if (timer) clearTimeout(timer);
-  botTimers.delete(userId);
-}
-
 function removeFromQueue(userId) {
   queue.delete(userId);
-  clearBotTimer(userId);
 }
 
 function removeQueueByWs(ws) {
@@ -177,7 +166,6 @@ function enqueueUser(userId, ws = null) {
     if (room) return buildMatchedPayload(room, userId);
   }
 
-  scheduleBotFallback(userId);
   return { type: "queued", queueSize: queue.size, previewSeed };
 }
 
@@ -194,26 +182,6 @@ function tryPairFromQueue() {
   room.playerB.ws = b.ws;
   notifyMatched(room);
   return true;
-}
-
-function matchWithBot(humanUserId) {
-  const human = queue.get(humanUserId);
-  if (!human) return;
-
-  removeFromQueue(humanUserId);
-  const botId = `bot_${Math.random().toString(36).slice(2, 8)}`;
-  const room = createRoom(humanUserId, botId);
-  room.playerA.ws = human.ws;
-  room.playerB.isBot = true;
-  notifyMatched(room);
-  console.log(`[match] paired ${humanUserId} with bot ${botId}`);
-}
-
-function scheduleBotFallback(userId) {
-  clearBotTimer(userId);
-  botTimers.set(userId, setTimeout(() => {
-    if (queue.has(userId)) matchWithBot(userId);
-  }, BOT_MATCH_MS));
 }
 
 function maybeAutoLockBot(room, humanSlot) {
@@ -251,7 +219,6 @@ function broadcastRoom(room, msg, excludeUserId = null) {
 function roomSnapshot(room, forUserId) {
   const slot = getSlot(room, forUserId);
   const opponent = slot === "playerA" ? room.playerB : room.playerA;
-  const self = slot === "playerA" ? room.playerA : room.playerB;
   const remainingMs = room.buildEndsAt ? Math.max(0, room.buildEndsAt - Date.now()) : BUILD_MS;
   const demoRemainingMs = room.demoEndsAt ? Math.max(0, room.demoEndsAt - Date.now()) : 0;
   const demoSlot = room.demoIndex === 0 ? "playerA" : "playerB";
@@ -368,7 +335,7 @@ async function startGradingPhase(room) {
   });
 }
 
-function fallbackJudge(room) {
+function fallbackJudge() {
   const score = () => ({
     creativity: 5 + Math.floor(Math.random() * 4),
     fun: 5 + Math.floor(Math.random() * 4),

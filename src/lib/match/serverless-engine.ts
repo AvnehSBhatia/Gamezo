@@ -4,14 +4,13 @@ import { pickChaosSeed } from "@/lib/chaos-seeds";
 import { judgeMatch, fallbackJudge as judgeFallback } from "@/lib/ai/judge";
 import type { MatchRoomState } from "@/lib/match/types";
 import {
-  BOT_MATCH_MS,
   BUILD_MS,
   DEMO_MS,
   MAX_HTML_BYTES,
   STALE_GRADING_MS,
   createRoomState,
 } from "@/lib/match/types";
-import { and, asc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
 
 function genRoomId() {
   return `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -325,22 +324,6 @@ export async function serverlessEnqueue(userId: string) {
       return matchedPayload(roomId, state, userId);
     }
 
-    const stale = await tx
-      .select()
-      .from(matchQueue)
-      .where(lt(matchQueue.joinedAt, new Date(Date.now() - BOT_MATCH_MS)));
-    if (stale.some((q) => q.userId === userId)) {
-      await tx.delete(matchQueue).where(eq(matchQueue.userId, userId));
-      const roomId = genRoomId();
-      const chaosSeed = pickChaosSeed();
-      const botId = `bot_${Math.random().toString(36).slice(2, 8)}`;
-      const state = createRoomState(userId, botId, true, chaosSeed);
-      await tx.insert(matchRooms).values({ id: roomId, playerA: userId, playerB: botId, state });
-      const payload = matchedPayload(roomId, state, userId);
-      await tx.insert(matchEvents).values({ roomId, payload });
-      return payload;
-    }
-
     return { type: "queued", queueSize: queued.length, previewSeed };
   });
 }
@@ -354,8 +337,6 @@ export async function serverlessQueueStatus(userId: string) {
   const inQueueRows = await db.select().from(matchQueue).where(eq(matchQueue.userId, userId)).limit(1);
   const inQueue = inQueueRows[0];
   if (inQueue) {
-    const botDue = inQueue.joinedAt.getTime() + BOT_MATCH_MS <= Date.now();
-    if (botDue) return serverlessEnqueue(userId);
     // COUNT instead of `SELECT *` for queue size — the original code pulled
     // every row just to read `.length`. The `::int` cast prevents postgres-js
     // from returning a BigInt (default for COUNT(*) which is bigint) that

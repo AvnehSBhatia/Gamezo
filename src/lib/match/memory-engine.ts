@@ -2,7 +2,7 @@ import { pickChaosSeed } from "@/lib/chaos-seeds";
 import { judgeMatch, fallbackJudge as judgeFallback } from "@/lib/ai/judge";
 import { getMemoryStore } from "@/lib/match/memory-store";
 import type { MatchRoomState } from "@/lib/match/types";
-import { BOT_MATCH_MS, BUILD_MS, DEMO_MS, MAX_HTML_BYTES, STALE_GRADING_MS, createRoomState } from "@/lib/match/types";
+import { BUILD_MS, DEMO_MS, MAX_HTML_BYTES, STALE_GRADING_MS, createRoomState } from "@/lib/match/types";
 
 function genRoomId() {
   return `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -233,18 +233,6 @@ export async function memoryEnqueue(userId: string) {
     return matchedPayload(roomId, state, userId);
   }
 
-  const entry = store.queue.get(userId);
-  if (entry && entry.joinedAt + BOT_MATCH_MS <= Date.now()) {
-    store.queue.delete(userId);
-    const roomId = genRoomId();
-    const chaosSeed = pickChaosSeed();
-    const botId = `bot_${Math.random().toString(36).slice(2, 8)}`;
-    const state = createRoom(roomId, userId, botId, true, chaosSeed);
-    const payload = matchedPayload(roomId, state, userId);
-    pushEvent(roomId, payload);
-    return payload;
-  }
-
   return { type: "queued", queueSize: queued.length, previewSeed };
 }
 
@@ -254,7 +242,6 @@ export async function memoryQueueStatus(userId: string) {
 
   const inQueue = getMemoryStore().queue.get(userId);
   if (inQueue) {
-    if (inQueue.joinedAt + BOT_MATCH_MS <= Date.now()) return memoryEnqueue(userId);
     return { type: "queued", queueSize: getMemoryStore().queue.size };
   }
 
