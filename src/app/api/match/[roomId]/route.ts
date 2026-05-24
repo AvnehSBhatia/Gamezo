@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGameServerHttpBase } from "@/lib/server/game-server-backend";
-import { useServerlessMatchBackend } from "@/lib/match/serverless-mode";
-import { serverlessGetPublicRoom, serverlessSubmitCode } from "@/lib/match/serverless-engine";
+import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
+import { matchGetPublicRoom, matchSubmitCode } from "@/lib/match/match-engine";
 
 export async function GET(
   _req: NextRequest,
@@ -9,9 +9,9 @@ export async function GET(
 ) {
   const { roomId } = await params;
 
-  if (useServerlessMatchBackend()) {
+  if (usePollingMatchBackend()) {
     try {
-      const data = await serverlessGetPublicRoom(roomId);
+      const data = await matchGetPublicRoom(roomId);
       if (!data) return NextResponse.json({ error: "Room not found" }, { status: 404 });
       return NextResponse.json(data);
     } catch {
@@ -35,9 +35,9 @@ export async function POST(
   const { roomId } = await params;
   const body = await req.json();
 
-  if (useServerlessMatchBackend()) {
+  if (usePollingMatchBackend()) {
     try {
-      const data = await serverlessSubmitCode(
+      const data = await matchSubmitCode(
         roomId,
         String(body.userId ?? ""),
         String(body.html ?? ""),

@@ -1,24 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGameServerHttpBase, gameServerUnavailableMessage } from "@/lib/server/game-server-backend";
-import { useServerlessMatchBackend } from "@/lib/match/serverless-mode";
-import { serverlessEnqueue, serverlessQueueStatus } from "@/lib/match/serverless-engine";
-import { VERCEL_GAME_SERVER_MSG, vercelNeedsGameServer } from "@/lib/match/vercel-setup";
+import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
+import { matchEnqueue, matchQueueStatus } from "@/lib/match/match-engine";
 
 export async function POST(req: NextRequest) {
-  if (vercelNeedsGameServer()) {
-    return NextResponse.json({ error: VERCEL_GAME_SERVER_MSG }, { status: 503 });
-  }
-
   const body = await req.json();
 
-  if (useServerlessMatchBackend()) {
+  if (usePollingMatchBackend()) {
     try {
       const userId = String(body.userId ?? "");
       if (!userId) return NextResponse.json({ error: "userId required" }, { status: 400 });
-      const data = await serverlessEnqueue(userId);
+      const data = await matchEnqueue(userId);
       return NextResponse.json(data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Serverless match failed";
+      const message = err instanceof Error ? err.message : "Match enqueue failed";
       return NextResponse.json({ error: message }, { status: 503 });
     }
   }
@@ -38,21 +33,17 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (vercelNeedsGameServer()) {
-    return NextResponse.json({ error: VERCEL_GAME_SERVER_MSG }, { status: 503 });
-  }
-
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
   }
 
-  if (useServerlessMatchBackend()) {
+  if (usePollingMatchBackend()) {
     try {
-      const data = await serverlessQueueStatus(userId);
+      const data = await matchQueueStatus(userId);
       return NextResponse.json(data);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Serverless poll failed";
+      const message = err instanceof Error ? err.message : "Match poll failed";
       return NextResponse.json({ error: message }, { status: 503 });
     }
   }

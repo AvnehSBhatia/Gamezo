@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { matchTransportMode } from "@/lib/match/serverless-mode";
+import { matchBackendMode, matchTransportMode } from "@/lib/match/serverless-mode";
 
 export async function GET() {
+  const mode = matchBackendMode();
   return NextResponse.json({
     transport: matchTransportMode(),
-    serverless: matchTransportMode() === "polling",
+    mode,
+    polling: matchTransportMode() === "polling",
   });
 }

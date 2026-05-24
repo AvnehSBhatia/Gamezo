@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { useServerlessMatchBackend } from "@/lib/match/serverless-mode";
-import { serverlessSync } from "@/lib/match/serverless-engine";
+import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
+import { matchSync } from "@/lib/match/match-engine";
 
 export async function GET(req: NextRequest) {
-  if (!useServerlessMatchBackend()) {
-    return NextResponse.json({ error: "Sync polling only available in serverless mode" }, { status: 404 });
+  if (!usePollingMatchBackend()) {
+    return NextResponse.json({ error: "Sync polling only available in polling mode" }, { status: 404 });
   }
 
   const roomId = req.nextUrl.searchParams.get("roomId") ?? "";
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const data = await serverlessSync(roomId, userId, since);
+    const data = await matchSync(roomId, userId, since);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";

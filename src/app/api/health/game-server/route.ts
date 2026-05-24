@@ -1,22 +1,13 @@
 import { NextResponse } from "next/server";
 import { getGameServerHttpBase, gameServerUnavailableMessage } from "@/lib/server/game-server-backend";
-import { matchTransportMode, useServerlessMatchBackend } from "@/lib/match/serverless-mode";
-import { VERCEL_GAME_SERVER_MSG, vercelNeedsGameServer } from "@/lib/match/vercel-setup";
+import { matchBackendMode, matchTransportMode, usePollingMatchBackend } from "@/lib/match/serverless-mode";
 
 export async function GET() {
-  if (vercelNeedsGameServer()) {
-    return NextResponse.json(
-      { ok: false, mode: "needs-game-server", error: VERCEL_GAME_SERVER_MSG },
-      { status: 503 },
-    );
-  }
-
-  if (useServerlessMatchBackend()) {
+  if (usePollingMatchBackend()) {
     return NextResponse.json({
       ok: true,
-      mode: "serverless",
+      mode: matchBackendMode(),
       transport: matchTransportMode(),
-      database: Boolean(process.env.DATABASE_URL),
     });
   }
 
