@@ -1,11 +1,14 @@
 import { db } from "@/lib/db/client";
 import { matchEvents, matchQueue, matchRooms } from "@/lib/db/schema/match";
 import { pickChaosSeed } from "@/lib/chaos-seeds";
+import { judgeMatch, fallbackJudge as judgeFallback } from "@/lib/ai/judge";
 import type { MatchRoomState } from "@/lib/match/types";
 import {
   BOT_MATCH_MS,
   BUILD_MS,
   DEMO_MS,
+  MAX_HTML_BYTES,
+  STALE_GRADING_MS,
   createRoomState,
 } from "@/lib/match/types";
 import { and, asc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
@@ -33,19 +36,11 @@ function matchedPayload(roomId: string, state: MatchRoomState, userId: string) {
   };
 }
 
-async function pushEvent(roomId: string, payload: Record<string, unknown>) {
-  await db.insert(matchEvents).values({ roomId, payload });
-  await db
-    .update(matchRooms)
-    .set({ version: sql`${matchRooms.version} + 1`, updatedAt: new Date() })
-    .where(eq(matchRooms.id, roomId));
-}
-
 async function loadRoom(roomId: string) {
   const rows = await db.select().from(matchRooms).where(eq(matchRooms.id, roomId)).limit(1);
   const row = rows[0];
   if (!row) return null;
-  return { id: row.id, state: row.state as MatchRoomState };
+  return { id: row.id, state: row.state as MatchRoomState, version: row.version };
 }
 
 async function findRoomByUser(userId: string) {
@@ -56,9 +51,54 @@ async function findRoomByUser(userId: string) {
     .limit(1);
   return rows[0] ?? null;
 }
+// findRoomByUser is still used by serverlessQueueStatus (a read-only fast path
+// that doesn't need the enqueue lock).
 
-async function saveRoom(roomId: string, state: MatchRoomState) {
-  await db.update(matchRooms).set({ state, updatedAt: new Date() }).where(eq(matchRooms.id, roomId));
+/**
+ * Load → mutate → CAS-save with bounded retries. The CAS UPDATE and the
+ * events INSERT run in a single `db.transaction()` so a crash between them
+ * can't desync state from the event log. Events from a losing CAS attempt
+ * are dropped (closure-local until commit).
+ *
+ * Returns `{ ok: false, result: null }` when the room was not found, and
+ * `{ ok: false, result: <last attempt's result> }` when all retries lost CAS.
+ */
+async function mutateRoom<T>(
+  roomId: string,
+  fn: (state: MatchRoomState, push: (payload: Record<string, unknown>) => void) => Promise<T> | T,
+  maxAttempts = 4,
+): Promise<{ ok: boolean; result: T | null; reason?: "not_found" | "conflict" }> {
+  let lastResult: T | null = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const room = await loadRoom(roomId);
+    if (!room) return { ok: false, result: null, reason: "not_found" };
+    const events: Record<string, unknown>[] = [];
+    const push = (payload: Record<string, unknown>) => {
+      events.push(payload);
+    };
+    lastResult = await fn(room.state, push);
+
+    const committed = await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(matchRooms)
+        .set({ state: room.state, version: room.version + 1, updatedAt: new Date() })
+        .where(and(eq(matchRooms.id, roomId), eq(matchRooms.version, room.version)))
+        .returning({ id: matchRooms.id });
+      if (updated.length === 0) return false;
+      if (events.length) {
+        await tx.insert(matchEvents).values(events.map((payload) => ({ roomId, payload })));
+      }
+      return true;
+    });
+
+    if (committed) return { ok: true, result: lastResult };
+    if (attempt < maxAttempts - 1) {
+      await new Promise((r) => setTimeout(r, 10 + Math.random() * 30));
+    } else {
+      console.warn(`[serverless-engine] CAS conflict after ${maxAttempts} attempts for room ${roomId}`);
+    }
+  }
+  return { ok: false, result: lastResult, reason: "conflict" };
 }
 
 function roomSnapshot(roomId: string, state: MatchRoomState, userId: string) {
@@ -93,15 +133,37 @@ function fallbackHtml(userId: string) {
   return `<!DOCTYPE html><html><body style="margin:0;background:#111;color:#888;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif"><p>No game submitted — ${userId.slice(0, 8)}</p></body></html>`;
 }
 
-async function advanceTimers(roomId: string, state: MatchRoomState) {
+/**
+ * Pure-ish state transition. Mutates `state` in place and emits events via
+ * `push`. Returns true if this caller transitioned the room into GRADING —
+ * the caller is then responsible for running the judge externally (so we
+ * don't await an LLM call while holding a CAS-able state).
+ */
+function advanceTimersStep(
+  state: MatchRoomState,
+  push: (p: Record<string, unknown>) => void,
+): { enteredGrading: boolean } {
   const now = Date.now();
+
+  // Stale-grading recovery: if the previous poller transitioned to GRADING but
+  // never committed a judge result (Vercel function killed mid-LLM-call), pick
+  // up the work here. The `gradingStartedAt` bump prevents tight-loop retries.
+  if (
+    state.phase === "GRADING" &&
+    state.gradingStartedAt &&
+    now - state.gradingStartedAt >= STALE_GRADING_MS
+  ) {
+    console.warn(`[serverless-engine] stale GRADING detected (${now - state.gradingStartedAt}ms), retrying judge`);
+    state.gradingStartedAt = now;
+    return { enteredGrading: true };
+  }
 
   if (state.phase === "WAITING_PROMPTS" && state.botLockAt && now >= state.botLockAt) {
     const bot = state.playerA.isBot ? state.playerA : state.playerB.isBot ? state.playerB : null;
     if (bot && !bot.promptLocked) {
       bot.promptLocked = true;
       bot.prompt = pickChaosSeed();
-      await pushEvent(roomId, {
+      push({
         type: "prompt-status",
         promptLocked: { playerA: state.playerA.promptLocked, playerB: state.playerB.promptLocked },
       });
@@ -109,40 +171,60 @@ async function advanceTimers(roomId: string, state: MatchRoomState) {
     state.botLockAt = null;
   }
 
+  if (state.phase === "WAITING_PROMPTS" && state.waitingPromptsTimeoutAt && now >= state.waitingPromptsTimeoutAt) {
+    let changed = false;
+    for (const p of [state.playerA, state.playerB]) {
+      if (!p.promptLocked) {
+        p.promptLocked = true;
+        if (!p.prompt) p.prompt = pickChaosSeed();
+        changed = true;
+      }
+    }
+    if (changed) {
+      push({
+        type: "prompt-status",
+        reason: "timeout",
+        promptLocked: { playerA: state.playerA.promptLocked, playerB: state.playerB.promptLocked },
+      });
+    }
+    state.waitingPromptsTimeoutAt = null;
+  }
+
   if (state.phase === "WAITING_PROMPTS" && state.playerA.promptLocked && state.playerB.promptLocked) {
     state.phase = "BUILD_PHASE";
     state.buildEndsAt = now + BUILD_MS;
     state.playerA.ready = false;
     state.playerB.ready = false;
-    await pushEvent(roomId, { type: "phase-change", state: "BUILD_PHASE", remainingMs: BUILD_MS, chaosSeed: state.chaosSeed });
+    push({ type: "phase-change", state: "BUILD_PHASE", remainingMs: BUILD_MS, chaosSeed: state.chaosSeed });
   }
 
   if (state.phase === "BUILD_PHASE" && state.buildEndsAt && now >= state.buildEndsAt) {
     state.phase = "RUN_PHASE";
     state.demoIndex = 0;
     state.demoEndsAt = now + DEMO_MS;
-    await pushDemoPhase(roomId, state);
+    pushDemoPhase(state, push);
   }
 
   if (state.phase === "RUN_PHASE" && state.demoEndsAt && now >= state.demoEndsAt) {
     if (state.demoIndex === 0) {
       state.demoIndex = 1;
       state.demoEndsAt = now + DEMO_MS;
-      await pushDemoPhase(roomId, state);
+      pushDemoPhase(state, push);
     } else {
       state.phase = "GRADING";
-      await pushEvent(roomId, { type: "phase-change", state: "GRADING" });
-      await runJudge(roomId, state);
+      state.gradingStartedAt = now;
+      push({ type: "phase-change", state: "GRADING" });
+      return { enteredGrading: true };
     }
   }
 
-  await saveRoom(roomId, state);
+  return { enteredGrading: false };
 }
 
-async function pushDemoPhase(roomId: string, state: MatchRoomState) {
+function pushDemoPhase(state: MatchRoomState, push: (p: Record<string, unknown>) => void) {
   const demoSlot = state.demoIndex === 0 ? "playerA" : "playerB";
   const demoPlayer = demoSlot === "playerA" ? state.playerA : state.playerB;
-  await pushEvent(roomId, {
+  push({
     type: "phase-change",
     state: "RUN_PHASE",
     demoPlayer: demoSlot,
@@ -152,88 +234,115 @@ async function pushDemoPhase(roomId: string, state: MatchRoomState) {
   });
 }
 
-async function runJudge(roomId: string, state: MatchRoomState) {
-  let judgeResult: unknown;
+async function callAiJudge(state: MatchRoomState, roomId: string): Promise<unknown> {
   try {
-    const base = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? process.env.VERCEL_URL;
-    const origin = base?.startsWith("http") ? base : base ? `https://${base}` : "http://127.0.0.1:3000";
-    const res = await fetch(`${origin.replace(/\/$/, "")}/api/ai-judge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        roomId,
-        playerA: { html: state.playerA.html, prompt: state.playerA.prompt },
-        playerB: { html: state.playerB.html, prompt: state.playerB.prompt },
-      }),
+    // Direct in-process call — going via the public `/api/ai-judge` route
+    // would hit the per-IP rate limiter under that internal IP and silently
+    // fall back to fake scores once the bucket drains.
+    return await judgeMatch({
+      roomId,
+      playerA: { html: state.playerA.html, prompt: state.playerA.prompt },
+      playerB: { html: state.playerB.html, prompt: state.playerB.prompt },
     });
-    judgeResult = res.ok ? await res.json() : fallbackJudge();
   } catch {
-    judgeResult = fallbackJudge();
+    return judgeFallback(state.playerA.html, state.playerB.html);
   }
-  state.judgeResult = judgeResult;
-  state.phase = "COMPLETE";
-  await saveRoom(roomId, state);
-  await pushEvent(roomId, {
-    type: "grade-complete",
-    judgeResult,
-    votes: { playerA: state.playerA.vote, playerB: state.playerB.vote },
-    shareUrl: `/watch/${roomId}`,
-  });
 }
 
-function fallbackJudge() {
-  const score = () => ({
-    creativity: 6,
-    fun: 6,
-    chaos: 6,
-    uniqueness: 6,
-    total: 24,
+async function commitJudgeResult(roomId: string, judgeResult: unknown): Promise<void> {
+  // Second-phase mutation: now that the LLM call is done, attach the result
+  // and flip to COMPLETE. CAS retries handle interleaved client actions.
+  const result = await mutateRoom(roomId, (state, push) => {
+    if (state.phase !== "GRADING") {
+      // Another caller (e.g. stale-grading retry) already committed a result.
+      return { committed: false } as const;
+    }
+    state.judgeResult = judgeResult;
+    state.phase = "COMPLETE";
+    push({
+      type: "grade-complete",
+      judgeResult,
+      votes: { playerA: state.playerA.vote, playerB: state.playerB.vote },
+      shareUrl: `/watch/${roomId}`,
+    });
+    return { committed: true } as const;
   });
-  return {
-    playerA: score(),
-    playerB: score(),
-    winner: "playerA",
-    commentary: "Serverless judge fallback — scores are provisional.",
-  };
+  if (result.ok && result.result && !result.result.committed) {
+    console.debug(`[serverless-engine] judge already committed for ${roomId}`);
+  } else if (!result.ok) {
+    console.warn(`[serverless-engine] commitJudgeResult ${result.reason} for ${roomId}`);
+  }
+}
+
+async function driveTimersAndMaybeJudge(roomId: string): Promise<void> {
+  const stepRes = await mutateRoom(roomId, (state, push) => advanceTimersStep(state, push));
+  if (stepRes.ok && stepRes.result?.enteredGrading) {
+    const room = await loadRoom(roomId);
+    if (!room) return;
+    const judgeResult = await callAiJudge(room.state, roomId);
+    await commitJudgeResult(roomId, judgeResult);
+  }
 }
 
 export async function serverlessEnqueue(userId: string) {
-  const existing = await findRoomByUser(userId);
-  if (existing) {
-    return matchedPayload(existing.id, existing.state as MatchRoomState, userId);
-  }
+  return db.transaction(async (tx) => {
+    // Serialize ALL enqueue transactions on one global advisory lock. Holds
+    // only for the duration of this tx and works regardless of whether
+    // `match_queue` has rows — `SELECT … FOR UPDATE` locks nothing on an
+    // empty table, which was the original TOCTOU failure mode.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('gamezo_match_queue'))`);
 
-  await db.delete(matchQueue).where(eq(matchQueue.userId, userId));
-  const previewSeed = pickChaosSeed();
-  await db.insert(matchQueue).values({ userId, previewSeed });
+    // Existing-room check is now INSIDE the lock — no TOCTOU window between
+    // pre-flight and the rest of the pairing logic.
+    const existingRows = await tx
+      .select()
+      .from(matchRooms)
+      .where(or(eq(matchRooms.playerA, userId), eq(matchRooms.playerB, userId)))
+      .limit(1);
+    if (existingRows.length) {
+      const existing = existingRows[0]!;
+      return matchedPayload(existing.id, existing.state as MatchRoomState, userId);
+    }
 
-  const queued = await db.select().from(matchQueue).orderBy(asc(matchQueue.joinedAt));
-  if (queued.length >= 2) {
-    const [a, b] = queued.slice(0, 2);
-    await db.delete(matchQueue).where(inArray(matchQueue.userId, [a.userId, b.userId]));
-    const roomId = genRoomId();
-    const chaosSeed = pickChaosSeed();
-    const state = createRoomState(a.userId, b.userId, false, chaosSeed);
-    await db.insert(matchRooms).values({ id: roomId, playerA: a.userId, playerB: b.userId, state });
-    await pushEvent(roomId, matchedPayload(roomId, state, a.userId));
-    await pushEvent(roomId, matchedPayload(roomId, state, b.userId));
-    return matchedPayload(roomId, state, userId);
-  }
+    await tx.delete(matchQueue).where(eq(matchQueue.userId, userId));
+    const previewSeed = pickChaosSeed();
+    await tx.insert(matchQueue).values({ userId, previewSeed });
 
-  const stale = await db.select().from(matchQueue).where(lt(matchQueue.joinedAt, new Date(Date.now() - BOT_MATCH_MS)));
-  if (stale.some((q) => q.userId === userId)) {
-    await db.delete(matchQueue).where(eq(matchQueue.userId, userId));
-    const roomId = genRoomId();
-    const chaosSeed = pickChaosSeed();
-    const botId = `bot_${Math.random().toString(36).slice(2, 8)}`;
-    const state = createRoomState(userId, botId, true, chaosSeed);
-    await db.insert(matchRooms).values({ id: roomId, playerA: userId, playerB: botId, state });
-    const payload = matchedPayload(roomId, state, userId);
-    await pushEvent(roomId, payload);
-    return payload;
-  }
+    const queued = await tx.select().from(matchQueue).orderBy(asc(matchQueue.joinedAt));
+    if (queued.length >= 2) {
+      const [a, b] = queued.slice(0, 2);
+      await tx.delete(matchQueue).where(inArray(matchQueue.userId, [a.userId, b.userId]));
+      const roomId = genRoomId();
+      const chaosSeed = pickChaosSeed();
+      const state = createRoomState(a.userId, b.userId, false, chaosSeed);
+      await tx.insert(matchRooms).values({ id: roomId, playerA: a.userId, playerB: b.userId, state });
+      // Initial matched events are part of the same transaction so a crash
+      // can't leave a room without the corresponding event log.
+      await tx.insert(matchEvents).values([
+        { roomId, payload: matchedPayload(roomId, state, a.userId) },
+        { roomId, payload: matchedPayload(roomId, state, b.userId) },
+      ]);
+      return matchedPayload(roomId, state, userId);
+    }
 
-  return { type: "queued", queueSize: queued.length, previewSeed };
+    const stale = await tx
+      .select()
+      .from(matchQueue)
+      .where(lt(matchQueue.joinedAt, new Date(Date.now() - BOT_MATCH_MS)));
+    if (stale.some((q) => q.userId === userId)) {
+      await tx.delete(matchQueue).where(eq(matchQueue.userId, userId));
+      const roomId = genRoomId();
+      const chaosSeed = pickChaosSeed();
+      const botId = `bot_${Math.random().toString(36).slice(2, 8)}`;
+      const state = createRoomState(userId, botId, true, chaosSeed);
+      await tx.insert(matchRooms).values({ id: roomId, playerA: userId, playerB: botId, state });
+      const payload = matchedPayload(roomId, state, userId);
+      await tx.insert(matchEvents).values({ roomId, payload });
+      return payload;
+    }
+
+    return { type: "queued", queueSize: queued.length, previewSeed };
+  });
 }
 
 export async function serverlessQueueStatus(userId: string) {
@@ -247,8 +356,13 @@ export async function serverlessQueueStatus(userId: string) {
   if (inQueue) {
     const botDue = inQueue.joinedAt.getTime() + BOT_MATCH_MS <= Date.now();
     if (botDue) return serverlessEnqueue(userId);
-    const size = await db.select().from(matchQueue);
-    return { type: "queued", queueSize: size.length };
+    // COUNT instead of `SELECT *` for queue size — the original code pulled
+    // every row just to read `.length`. The `::int` cast prevents postgres-js
+    // from returning a BigInt (default for COUNT(*) which is bigint) that
+    // Number() coerces with precision loss on very large counts.
+    const sizeRows = await db.execute(sql`SELECT COUNT(*)::int AS n FROM match_queue`);
+    const size = Number((sizeRows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
+    return { type: "queued", queueSize: size };
   }
 
   return { type: "idle" };
@@ -258,7 +372,7 @@ export async function serverlessSync(roomId: string, userId: string, since: numb
   const room = await loadRoom(roomId);
   if (!room) return { events: [], latestId: since };
 
-  await advanceTimers(roomId, room.state);
+  await driveTimersAndMaybeJudge(roomId);
   const refreshed = await loadRoom(roomId);
   if (!refreshed) return { events: [], latestId: since };
 
@@ -286,64 +400,79 @@ export async function serverlessAction(msg: Record<string, unknown>) {
   if (type === "join-room") {
     const room = await loadRoom(roomId);
     if (!room || !getSlot(room.state, userId)) return { error: "Room not found" };
-    await advanceTimers(roomId, room.state);
+    await driveTimersAndMaybeJudge(roomId);
     const refreshed = (await loadRoom(roomId))!;
     return { ok: true, snapshot: roomSnapshot(roomId, refreshed.state, userId) };
   }
 
+  // Validate membership against current state before mutating.
   const room = await loadRoom(roomId);
   if (!room) return { error: "Room not found" };
-  const slot = getSlot(room.state, userId);
-  if (!slot) return { error: "Not in room" };
-  const state = room.state;
-  const player = slot === "playerA" ? state.playerA : state.playerB;
-  const opponent = slot === "playerA" ? state.playerB : state.playerA;
+  if (!getSlot(room.state, userId)) return { error: "Not in room" };
 
   if (type === "lock-prompt") {
-    player.promptLocked = true;
-    player.prompt = String(msg.prompt ?? "").slice(0, 200);
-    await pushEvent(roomId, {
-      type: "prompt-status",
-      promptLocked: { playerA: state.playerA.promptLocked, playerB: state.playerB.promptLocked },
+    const promptText = String(msg.prompt ?? "").slice(0, 200);
+    const mutation = await mutateRoom(roomId, (state, push) => {
+      const slot = getSlot(state, userId);
+      if (!slot) return;
+      const player = slot === "playerA" ? state.playerA : state.playerB;
+      const opponent = slot === "playerA" ? state.playerB : state.playerA;
+      player.promptLocked = true;
+      player.prompt = promptText;
+      push({
+        type: "prompt-status",
+        promptLocked: { playerA: state.playerA.promptLocked, playerB: state.playerB.promptLocked },
+      });
+      if (opponent.isBot && !state.botLockAt) state.botLockAt = Date.now() + 1200;
     });
-    if (opponent.isBot && !state.botLockAt) state.botLockAt = Date.now() + 1200;
-    await saveRoom(roomId, state);
-    await advanceTimers(roomId, state);
-    return { ok: true };
+    if (mutation.ok) await driveTimersAndMaybeJudge(roomId);
+    return { ok: mutation.ok };
   }
 
-  if (type === "player-ready" && state.phase === "BUILD_PHASE") {
-    player.ready = true;
-    if (opponent.isBot) opponent.ready = true;
-    await pushEvent(roomId, { type: "ready-status", ready: { playerA: state.playerA.ready, playerB: state.playerB.ready } });
-    if (state.playerA.ready && state.playerB.ready) {
-      state.phase = "RUN_PHASE";
-      state.demoIndex = 0;
-      state.demoEndsAt = Date.now() + DEMO_MS;
-      await saveRoom(roomId, state);
-      await pushDemoPhase(roomId, state);
-    } else {
-      await saveRoom(roomId, state);
-    }
-    return { ok: true };
+  if (type === "player-ready") {
+    const mutation = await mutateRoom(roomId, (state, push) => {
+      if (state.phase !== "BUILD_PHASE") return;
+      const slot = getSlot(state, userId);
+      if (!slot) return;
+      const player = slot === "playerA" ? state.playerA : state.playerB;
+      const opponent = slot === "playerA" ? state.playerB : state.playerA;
+      player.ready = true;
+      if (opponent.isBot) opponent.ready = true;
+      push({ type: "ready-status", ready: { playerA: state.playerA.ready, playerB: state.playerB.ready } });
+      if (state.playerA.ready && state.playerB.ready) {
+        state.phase = "RUN_PHASE";
+        state.demoIndex = 0;
+        state.demoEndsAt = Date.now() + DEMO_MS;
+        pushDemoPhase(state, push);
+      }
+    });
+    return { ok: mutation.ok };
   }
 
-  if (type === "demo-input" && state.phase === "RUN_PHASE") {
-    const demoSlot = state.demoIndex === 0 ? "playerA" : "playerB";
+  if (type === "demo-input") {
+    // Demo input is fire-and-forget; it doesn't mutate room state, just
+    // appends an event for the spectator stream.
+    if (room.state.phase !== "RUN_PHASE") return { ok: true };
+    const slot = getSlot(room.state, userId);
+    if (!slot) return { ok: true };
+    const demoSlot = room.state.demoIndex === 0 ? "playerA" : "playerB";
     const playingSlot = demoSlot === "playerA" ? "playerB" : "playerA";
     if (slot !== playingSlot) return { ok: true };
-    await pushEvent(roomId, { type: "demo-input", event: msg.event });
+    await db.insert(matchEvents).values({ roomId, payload: { type: "demo-input", event: msg.event } });
     return { ok: true };
   }
 
   if (type === "vote") {
     const voteFor = msg.voteFor === "playerA" || msg.voteFor === "playerB" ? msg.voteFor : null;
-    if (voteFor && voteFor !== slot) {
+    if (!voteFor) return { ok: true };
+    const mutation = await mutateRoom(roomId, (state, push) => {
+      const slot = getSlot(state, userId);
+      if (!slot || voteFor === slot) return;
+      const player = slot === "playerA" ? state.playerA : state.playerB;
       player.vote = voteFor;
-      await saveRoom(roomId, state);
-      await pushEvent(roomId, { type: "vote-update", votes: { playerA: state.playerA.vote, playerB: state.playerB.vote } });
-    }
-    return { ok: true };
+      push({ type: "vote-update", votes: { playerA: state.playerA.vote, playerB: state.playerB.vote } });
+    });
+    return { ok: mutation.ok };
   }
 
   return { error: `Unknown action: ${type}` };
@@ -369,13 +498,23 @@ export async function serverlessGetPublicRoom(roomId: string) {
 }
 
 export async function serverlessSubmitCode(roomId: string, userId: string, html: string, assets: unknown[]) {
+  if (html.length > MAX_HTML_BYTES) {
+    return { error: `Submission too large (${html.length} bytes, max ${MAX_HTML_BYTES})` };
+  }
+  // Pre-flight check disambiguates "room not found" from CAS conflict so the
+  // HTTP layer can return a meaningful status code (404 vs 409).
   const room = await loadRoom(roomId);
   if (!room) return { error: "Room not found" };
-  const slot = getSlot(room.state, userId);
-  if (!slot) return { error: "Not in room" };
-  const player = slot === "playerA" ? room.state.playerA : room.state.playerB;
-  player.html = html;
-  player.assets = assets;
-  await saveRoom(roomId, room.state);
+  if (!getSlot(room.state, userId)) return { error: "Not in room" };
+
+  const mutation = await mutateRoom(roomId, (state) => {
+    const slot = getSlot(state, userId);
+    if (!slot) return;
+    const player = slot === "playerA" ? state.playerA : state.playerB;
+    player.html = html;
+    player.assets = assets;
+  });
+  if (!mutation.ok && mutation.reason === "not_found") return { error: "Room not found" };
+  if (!mutation.ok) return { error: "Save conflict — try again" };
   return { ok: true };
 }
