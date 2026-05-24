@@ -22,7 +22,7 @@ export const STARTER_CODE = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export const TOTAL_SECONDS = 300; // 5 min per spec (300s); set 180 for demo
+export const TOTAL_SECONDS = 60; // 1 min per spec (60s)
 
 export interface ChatMsg {
   from: "system" | "you" | "opponent";
@@ -30,6 +30,6 @@ export interface ChatMsg {
 }
 
 export const SEED_MESSAGES: ChatMsg[] = [
-  { from: "system",   text: "Match started — 3 minutes on the clock." },
+  { from: "system",   text: "Match started — 1 minute on the clock." },
   { from: "opponent", text: "let's goooo" },
 ];

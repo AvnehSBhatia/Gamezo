@@ -10,7 +10,7 @@ import { aiChat } from "@/lib/ai/chat";
 
 const MODEL = "deepseek.v3.1";
 
-const JUDGE_SYSTEM = `You are the Gamezo AI judge — a witty, chaotic referee for a 5-minute game-building battle.
+const JUDGE_SYSTEM = `You are the Gamezo AI judge — a witty, chaotic referee for a 1-minute game-building battle.
 
 Two players built tiny web games from their prompts. Evaluate EACH game on exactly four dimensions (0-10 each):
 - creativity: Original ideas, surprising mechanics, artistic flair

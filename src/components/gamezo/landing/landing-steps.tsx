@@ -4,7 +4,7 @@ import { Code2, Heart, Play, Trophy, Zap } from "lucide-react";
 
 const steps = [
   { icon: Zap, title: "Match", detail: "Get paired instantly" },
-  { icon: Code2, title: "Build", detail: "Create with AI in 5 minutes" },
+  { icon: Code2, title: "Build", detail: "Create with AI in 1 minute" },
   { icon: Play, title: "Demo", detail: "Show off your game live" },
   { icon: Heart, title: "Vote", detail: "The crowd decides the winner" },
   { icon: Trophy, title: "Get judged", detail: "Earn points and climb" },

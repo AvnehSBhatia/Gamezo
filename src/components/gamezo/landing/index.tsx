@@ -31,7 +31,7 @@ export function GamezoLandingPage() {
           Gamezo
         </h1>
         <p className="mt-4 max-w-3xl text-[clamp(2rem,5vw,4rem)] font-black leading-[1.04] tracking-tight">
-          Build a game against a stranger in <span className="text-blue-600">5 minutes</span>
+          Build a game against a stranger in <span className="text-blue-600">1 minute</span>
         </p>
         <div className="mt-8 flex w-full max-w-3xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-center">
           <Link
