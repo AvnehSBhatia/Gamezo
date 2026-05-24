@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
-const BUILDER_SYSTEM = `You are an expert game developer helping someone build a tiny web game in under 5 minutes.
+const BUILDER_SYSTEM = `You are an expert game developer helping someone build a tiny web game in under 1 minute.
 
 Given the user's description or change request, return a COMPLETE, self-contained HTML document that:
 - Uses ONLY vanilla HTML, CSS, and JavaScript — no external libraries, no CDN links

@@ -42,7 +42,7 @@ export function GameTopBar({
           <Timer className="h-9 w-9" />
           {timeStr}
         </div>
-        <p className="mt-1 text-sm font-black uppercase tracking-[0.18em] text-orange-500">5 min build battle</p>
+        <p className="mt-1 text-sm font-black uppercase tracking-[0.18em] text-orange-500">1 min build battle</p>
       </div>
 
       <div className="flex items-center justify-start gap-3 lg:justify-end">

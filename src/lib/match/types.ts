@@ -61,7 +61,7 @@ export function createRoomState(playerAId: string, playerBId: string, isBotB: bo
   };
 }
 
-export const BUILD_MS = 5 * 60 * 1000;
+export const BUILD_MS = 60 * 1000;
 export const DEMO_MS = 30 * 1000;
 export const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
 export const MAX_HTML_BYTES = 256 * 1024;

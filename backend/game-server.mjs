@@ -7,7 +7,7 @@ import { WebSocketServer } from "ws";
 import { pickChaosSeed } from "./chaos-seeds.mjs";
 
 const PORT = parseInt(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? "3001", 10);
-const BUILD_MS = 5 * 60 * 1000;
+const BUILD_MS = 60 * 1000;
 const DEMO_MS = 30 * 1000;
 const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
 const MAX_HTML_BYTES = 256 * 1024;

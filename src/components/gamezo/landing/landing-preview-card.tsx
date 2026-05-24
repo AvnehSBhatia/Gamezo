@@ -22,7 +22,7 @@ export function LandingPreviewCard() {
         <div className="flex flex-col items-center">
           <div className="flex items-center gap-2 rounded-2xl border-2 border-neutral-950 bg-white px-4 py-2 text-2xl font-black tabular-nums">
             <Clock className="h-6 w-6" />
-            05:00
+            01:00
           </div>
           <div className="mt-2 flex items-center gap-1">
             {Array.from({ length: 16 }).map((_, index) => (

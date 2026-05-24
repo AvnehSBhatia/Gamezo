@@ -132,13 +132,13 @@ export function GamezoMatchmakingPage() {
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-lg font-bold text-neutral-500">
           {ready
-            ? "Get ready — you'll lock prompts, then build for 5 minutes."
+            ? "Get ready — you'll lock prompts, then build for 1 minute."
             : inviteHintVisible
               ? "Hmm doesn't look like anybody's available. You should invite a friend."
             : statusLine}
         </p>
         <div className="mx-auto mt-8 flex max-w-md flex-wrap items-center justify-center gap-4 text-sm font-black text-neutral-600">
-          <span className="flex items-center gap-2"><Clock className="h-4 w-4" /> 5 min build</span>
+          <span className="flex items-center gap-2"><Clock className="h-4 w-4" /> 1 min build</span>
           <span className="flex items-center gap-2"><UserRound className="h-4 w-4" /> 2 players</span>
           <span className="flex items-center gap-2"><Link2 className="h-4 w-4" /> Replay link after match</span>
         </div>
