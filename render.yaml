@@ -1,5 +1,5 @@
 # One-click full-stack deploy — Next.js + game server + WebSocket proxy.
-# Alternative to Vercel + separate Railway game server.
+# No database required (in-memory matchmaking).
 # https://render.com → New Blueprint → connect repo
 services:
   - type: web
@@ -12,8 +12,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATABASE_URL
-        sync: false
       - key: EAZO_PRIVATE_KEY
         sync: false
       - key: EAZO_APP_ID

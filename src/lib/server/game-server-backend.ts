@@ -13,10 +13,10 @@ export function getGameServerHttpBase(): string {
 
 export function gameServerUnavailableMessage(): string {
   if (process.env.VERCEL || process.env.VERCEL_URL) {
-    if (process.env.DATABASE_URL) {
-      return "Serverless matchmaking failed — check Vercel deploy logs for migration errors.";
+    if (process.env.GAME_SERVER_HTTP) {
+      return "Game server unreachable — check GAME_SERVER_HTTP URL and that Render service is running.";
     }
-    return "Add Postgres on Vercel: Project → Storage → Create Database → redeploy.";
+    return "Deploy the free game server on Render (see render-game-server.yaml), then set GAME_SERVER_HTTP and NEXT_PUBLIC_GAME_SERVER_URL on Vercel.";
   }
   return "Game server not running. Start it with: npm run dev";
 }

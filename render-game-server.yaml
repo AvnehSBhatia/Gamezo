@@ -1,0 +1,19 @@
+# Free game server for Vercel (no database — in-memory matchmaking).
+# Render → New Blueprint → connect this repo (or New Web Service manually).
+# Then on Vercel set:
+#   GAME_SERVER_HTTP=https://<this-service>.onrender.com
+#   NEXT_PUBLIC_GAME_SERVER_URL=https://<this-service>.onrender.com
+#   APP_URL=https://<your-vercel-app>.vercel.app
+services:
+  - type: web
+    name: gamezo-game-server
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node backend/game-server.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        sync: false
