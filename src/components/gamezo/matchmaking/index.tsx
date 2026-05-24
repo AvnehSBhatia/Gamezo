@@ -79,7 +79,7 @@ export function GamezoMatchmakingPage() {
           setError(
             err instanceof Error
               ? err.message
-              : "Matchmaking failed — is the game server running? (npm run dev)",
+              : "Matchmaking failed — check your connection and try again.",
           );
         }
       }

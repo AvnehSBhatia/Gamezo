@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getGameServerHttpBase, gameServerUnavailableMessage } from "@/lib/server/game-server-backend";
 import { useServerlessMatchBackend } from "@/lib/match/serverless-mode";
 import { serverlessEnqueue, serverlessQueueStatus } from "@/lib/match/serverless-engine";
+import { VERCEL_DB_SETUP_MSG, vercelNeedsDatabase } from "@/lib/match/vercel-setup";
 
 export async function POST(req: NextRequest) {
+  if (vercelNeedsDatabase()) {
+    return NextResponse.json({ error: VERCEL_DB_SETUP_MSG }, { status: 503 });
+  }
+
   const body = await req.json();
 
   if (useServerlessMatchBackend()) {
@@ -33,6 +38,10 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  if (vercelNeedsDatabase()) {
+    return NextResponse.json({ error: VERCEL_DB_SETUP_MSG }, { status: 503 });
+  }
+
   const userId = req.nextUrl.searchParams.get("userId");
   if (!userId) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
