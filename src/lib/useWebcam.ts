@@ -114,11 +114,15 @@ export function useWebcam() {
   }
 
   useEffect(() => {
-    void requestMedia();
+    const videos = videosRef.current;
+    const timer = setTimeout(() => {
+      void requestMedia();
+    }, 0);
     return () => {
+      clearTimeout(timer);
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
-      videosRef.current.clear();
+      videos.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);

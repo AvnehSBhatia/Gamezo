@@ -7,12 +7,13 @@ import {
   BUILD_MS,
   DEMO_MS,
   MAX_HTML_BYTES,
+  QUEUE_STALE_MS,
   STALE_GRADING_MS,
   createRoomState,
   isLegacyBotRoom,
   isReusableMatchRoom,
 } from "@/lib/match/types";
-import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 
 function genRoomId() {
   return `room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -35,6 +36,10 @@ function matchedPayload(roomId: string, state: MatchRoomState, userId: string) {
     chaosSeed: state.chaosSeed,
     opponentIsBot: state.playerA.isBot || state.playerB.isBot,
   };
+}
+
+function isHumanQueueUser(userId: string): boolean {
+  return Boolean(userId) && !userId.startsWith("bot_");
 }
 
 async function loadRoom(roomId: string) {
@@ -304,6 +309,8 @@ export async function serverlessEnqueue(userId: string) {
     // `match_queue` has rows — `SELECT … FOR UPDATE` locks nothing on an
     // empty table, which was the original TOCTOU failure mode.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('gamezo_match_queue'))`);
+    const staleBefore = new Date(Date.now() - QUEUE_STALE_MS);
+    await tx.delete(matchQueue).where(lt(matchQueue.lastSeenAt, staleBefore));
 
     // Existing-room check is now INSIDE the lock — no TOCTOU window between
     // pre-flight and the rest of the pairing logic.
@@ -329,23 +336,27 @@ export async function serverlessEnqueue(userId: string) {
 
     await tx.delete(matchQueue).where(eq(matchQueue.userId, userId));
     const previewSeed = pickChaosSeed();
-    await tx.insert(matchQueue).values({ userId, previewSeed });
+    await tx.insert(matchQueue).values({ userId, previewSeed, lastSeenAt: new Date() });
 
-    const queued = await tx.select().from(matchQueue).orderBy(asc(matchQueue.joinedAt));
+    const queued = (await tx.select().from(matchQueue).orderBy(asc(matchQueue.joinedAt))).filter((entry) =>
+      isHumanQueueUser(entry.userId),
+    );
     if (queued.length >= 2) {
       const [a, b] = queued.slice(0, 2);
-      await tx.delete(matchQueue).where(inArray(matchQueue.userId, [a.userId, b.userId]));
-      const roomId = genRoomId();
-      const chaosSeed = pickChaosSeed();
-      const state = createRoomState(a.userId, b.userId, false, chaosSeed);
-      await tx.insert(matchRooms).values({ id: roomId, playerA: a.userId, playerB: b.userId, state });
-      // Initial matched events are part of the same transaction so a crash
-      // can't leave a room without the corresponding event log.
-      await tx.insert(matchEvents).values([
-        { roomId, payload: matchedPayload(roomId, state, a.userId) },
-        { roomId, payload: matchedPayload(roomId, state, b.userId) },
-      ]);
-      return matchedPayload(roomId, state, userId);
+      if (a.userId !== b.userId) {
+        await tx.delete(matchQueue).where(inArray(matchQueue.userId, [a.userId, b.userId]));
+        const roomId = genRoomId();
+        const chaosSeed = pickChaosSeed();
+        const state = createRoomState(a.userId, b.userId, false, chaosSeed);
+        await tx.insert(matchRooms).values({ id: roomId, playerA: a.userId, playerB: b.userId, state });
+        // Initial matched events are part of the same transaction so a crash
+        // can't leave a room without the corresponding event log.
+        await tx.insert(matchEvents).values([
+          { roomId, payload: matchedPayload(roomId, state, a.userId) },
+          { roomId, payload: matchedPayload(roomId, state, b.userId) },
+        ]);
+        return matchedPayload(roomId, state, userId);
+      }
     }
 
     return { type: "queued", queueSize: queued.length, previewSeed };
@@ -353,6 +364,8 @@ export async function serverlessEnqueue(userId: string) {
 }
 
 export async function serverlessQueueStatus(userId: string) {
+  await db.delete(matchQueue).where(lt(matchQueue.lastSeenAt, new Date(Date.now() - QUEUE_STALE_MS)));
+
   const roomRow = await findReusableRoomByUser(userId);
   if (roomRow) {
     return matchedPayload(roomRow.id, roomRow.state as MatchRoomState, userId);
@@ -361,16 +374,22 @@ export async function serverlessQueueStatus(userId: string) {
   const inQueueRows = await db.select().from(matchQueue).where(eq(matchQueue.userId, userId)).limit(1);
   const inQueue = inQueueRows[0];
   if (inQueue) {
+    await db.update(matchQueue).set({ lastSeenAt: new Date() }).where(eq(matchQueue.userId, userId));
     // COUNT instead of `SELECT *` for queue size — the original code pulled
     // every row just to read `.length`. The `::int` cast prevents postgres-js
     // from returning a BigInt (default for COUNT(*) which is bigint) that
     // Number() coerces with precision loss on very large counts.
-    const sizeRows = await db.execute(sql`SELECT COUNT(*)::int AS n FROM match_queue`);
+    const sizeRows = await db.execute(sql`SELECT COUNT(*)::int AS n FROM match_queue WHERE user_id NOT LIKE 'bot\_%'`);
     const size = Number((sizeRows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
     return { type: "queued", queueSize: size };
   }
 
   return { type: "idle" };
+}
+
+export async function serverlessDequeue(userId: string) {
+  await db.delete(matchQueue).where(eq(matchQueue.userId, userId));
+  return { ok: true };
 }
 
 export async function serverlessSync(roomId: string, userId: string, since: number) {

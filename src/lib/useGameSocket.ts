@@ -23,8 +23,8 @@ export function useGameSocket(handlers: Record<string, Handler>, enabled = true)
 
   useEffect(() => {
     if (!enabled) {
-      setConnected(false);
-      return;
+      const timer = setTimeout(() => setConnected(false), 0);
+      return () => clearTimeout(timer);
     }
 
     let alive = true;

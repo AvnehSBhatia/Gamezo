@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { usePollingMatchBackend } from "@/lib/match/serverless-mode";
+import { usesPollingMatchBackend } from "@/lib/match/serverless-mode";
 import { matchSync } from "@/lib/match/match-engine";
 
 export async function GET(req: NextRequest) {
-  if (!usePollingMatchBackend()) {
+  if (!usesPollingMatchBackend()) {
     return NextResponse.json({ error: "Sync polling only available in polling mode" }, { status: 404 });
   }
 

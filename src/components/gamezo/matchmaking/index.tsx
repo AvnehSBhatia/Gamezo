@@ -8,99 +8,137 @@ import { FindingOpponentLoader } from "@/components/gamezo/matchmaking/finding-o
 import { VersusLobby } from "@/components/gamezo/matchmaking/versus-lobby";
 import { getOrCreateUserId, storeMatchFromWs } from "@/components/gamezo/game/session";
 import type { QueueResponse } from "@/lib/api/match-queue";
-import { enqueueMatch, pollMatchStatus } from "@/lib/api/match-queue";
+import { enqueueMatch, leaveMatchQueue, pollMatchStatus } from "@/lib/api/match-queue";
 import { useSafeNavigate } from "@/lib/use-safe-navigate";
 import { useMatchTransport } from "@/lib/useMatchTransport";
 import { Camera, Clock, Link2, Mic, ShieldCheck, UserRound, Wifi, WifiOff } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export function GamezoMatchmakingPage() {
   const navigate = useSafeNavigate();
-  const startedRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [inviteHintVisible, setInviteHintVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chaosSeed, setChaosSeed] = useState("Finding your chaos seed…");
   const [statusLine, setStatusLine] = useState("Joining matchmaking queue…");
 
-  const handleMatched = useCallback((msg: QueueResponse) => {
+  const handleMatched = useCallback((msg: QueueResponse, userId: string) => {
+    if (!isValidHumanMatch(msg, userId)) {
+      setError("Matched room was unavailable. Still searching for another player…");
+      return false;
+    }
     storeMatchFromWs(msg);
     if (msg.chaosSeed) setChaosSeed(String(msg.chaosSeed));
     setReady(true);
     setInviteHintVisible(false);
     setStatusLine("Opponent found!");
     setError(null);
+    return true;
   }, []);
 
   const { send, connected, mode } = useMatchTransport({
-    matched: (msg) => handleMatched(msg as QueueResponse),
+    matched: (msg) => {
+      handleMatched(msg as QueueResponse, getOrCreateUserId());
+    },
     error: (msg) => setError(String(msg.message)),
   });
 
   useEffect(() => {
-    if (startedRef.current || ready) return;
-    startedRef.current = true;
+    if (ready || mode === "loading") return;
+    if (mode === "websocket" && !connected) {
+      const timer = setTimeout(() => setStatusLine("Connecting to matchmaking…"), 0);
+      return () => clearTimeout(timer);
+    }
 
     const userId = getOrCreateUserId();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let resetTimer: ReturnType<typeof setTimeout> | null = null;
     let inviteHintTimer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
+    let matched = false;
 
-    async function start() {
-      try {
-        setInviteHintVisible(false);
-        inviteHintTimer = setTimeout(() => {
-          if (!cancelled) setInviteHintVisible(true);
-        }, 3000);
+    resetTimer = setTimeout(() => {
+      if (cancelled) return;
+      setError(null);
+      setInviteHintVisible(false);
+    }, 0);
+    inviteHintTimer = setTimeout(() => {
+      if (!cancelled) setInviteHintVisible(true);
+    }, 3000);
 
-        const result = await enqueueMatch(userId);
-        if (cancelled) return;
+    async function enqueuePolling() {
+      const result = await enqueueMatch(userId);
+      if (cancelled) return;
 
-        if (result.type === "matched") {
-          handleMatched(result);
-          return;
-        }
+      if (result.type === "matched") {
+        matched = handleMatched(result, userId);
+        return;
+      }
 
-        if (result.previewSeed) setChaosSeed(String(result.previewSeed));
-        setStatusLine("In queue — matching with the next available player…");
+      if (result.previewSeed) setChaosSeed(String(result.previewSeed));
+      setStatusLine("In queue — matching with the next available player…");
+    }
 
-        pollTimer = setInterval(async () => {
-          try {
-            const status = await pollMatchStatus(userId);
-            if (cancelled) return;
-            if (status.type === "matched") {
-              if (pollTimer) clearInterval(pollTimer);
-              handleMatched(status);
-            }
-          } catch {
-            // keep polling
+    async function pollUntilMatched() {
+      let enqueued = false;
+
+      while (!cancelled && !matched) {
+        try {
+          if (!enqueued) {
+            await enqueuePolling();
+            enqueued = true;
           }
-        }, 1000);
-      } catch (err) {
-        if (inviteHintTimer) clearTimeout(inviteHintTimer);
-        if (!cancelled) {
+
+          await wait(1000);
+          if (cancelled) return;
+
+          const status = await pollMatchStatus(userId);
+          if (cancelled) return;
+
+          if (status.type === "matched") {
+            matched = handleMatched(status, userId);
+            continue;
+          }
+
+          if (status.type === "idle") {
+            enqueued = false;
+            continue;
+          }
+
+          setError(null);
+          setStatusLine("In queue — matching with the next available player…");
+        } catch (err) {
           setError(
             err instanceof Error
               ? err.message
-              : "Matchmaking failed — check your connection and try again.",
+              : "Matchmaking connection hiccup — still trying.",
           );
+          await wait(1000);
         }
       }
     }
 
-    start();
+    if (mode === "polling") {
+      void pollUntilMatched();
+    } else {
+      resetTimer = setTimeout(() => {
+        if (!cancelled) setStatusLine("In queue — matching with the next available player…");
+      }, 0);
+      send({ type: "enqueue", userId });
+    }
 
     return () => {
       cancelled = true;
+      if (resetTimer) clearTimeout(resetTimer);
       if (inviteHintTimer) clearTimeout(inviteHintTimer);
-      if (pollTimer) clearInterval(pollTimer);
+      if (!matched) {
+        if (mode === "polling") {
+          void leaveMatchQueue(userId).catch(() => {});
+        } else {
+          send({ type: "dequeue", userId });
+        }
+      }
     };
-  }, [ready, handleMatched]);
-
-  useEffect(() => {
-    if (!connected || ready || mode === "polling") return;
-    send({ type: "enqueue", userId: getOrCreateUserId() });
-  }, [connected, ready, send, mode]);
+  }, [connected, mode, ready, send, handleMatched]);
 
   useEffect(() => {
     if (!ready) return;
@@ -148,4 +186,18 @@ export function GamezoMatchmakingPage() {
       <ChaosSeedCard seed={chaosSeed} error={error} />
     </main>
   );
+}
+
+function isValidHumanMatch(msg: QueueResponse, userId: string): boolean {
+  if (msg.type !== "matched") return false;
+  if (!msg.roomId || !msg.yourSlot) return false;
+  if (!msg.playerA || !msg.playerB) return false;
+  if (msg.playerA === msg.playerB) return false;
+  if (msg.playerA !== userId && msg.playerB !== userId) return false;
+  if (msg.opponentIsBot) return false;
+  return !msg.playerA.startsWith("bot_") && !msg.playerB.startsWith("bot_");
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

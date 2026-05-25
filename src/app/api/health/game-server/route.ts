@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { getGameServerHttpBase, gameServerUnavailableMessage } from "@/lib/server/game-server-backend";
-import { matchBackendMode, matchTransportMode, usePollingMatchBackend } from "@/lib/match/serverless-mode";
+import { matchBackendMode, matchTransportMode, usesPollingMatchBackend } from "@/lib/match/serverless-mode";
 
 export async function GET() {
-  if (usePollingMatchBackend()) {
+  if (usesPollingMatchBackend()) {
     return NextResponse.json({
       ok: true,
       mode: matchBackendMode(),

@@ -3,6 +3,7 @@ import type { MatchRoomState } from "@/lib/match/types";
 export interface QueueEntry {
   userId: string;
   joinedAt: number;
+  lastSeenAt: number;
   previewSeed: string;
 }
 

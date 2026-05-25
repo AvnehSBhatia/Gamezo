@@ -44,9 +44,14 @@ export function GamezoSpectatorPage({ roomId }: SpectatorPageProps) {
 
   useEffect(() => {
     send({ type: "spectate", roomId });
-    refresh();
+    const refreshTimer = setTimeout(() => {
+      void refresh();
+    }, 0);
     const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(refreshTimer);
+      clearInterval(interval);
+    };
   }, [roomId, send, refresh]);
 
   if (loading) {

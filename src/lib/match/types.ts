@@ -76,6 +76,7 @@ export function isReusableMatchRoom(state: MatchRoomState): boolean {
 export const BUILD_MS = 60 * 1000;
 export const DEMO_MS = 30 * 1000;
 export const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
+export const QUEUE_STALE_MS = 15 * 1000;
 export const MAX_HTML_BYTES = 256 * 1024;
 /** A room sitting in GRADING longer than this is presumed stuck (Vercel
  *  function killed mid-judge). Next poller retries the judge. */

@@ -6,6 +6,7 @@ import {
   BUILD_MS,
   DEMO_MS,
   MAX_HTML_BYTES,
+  QUEUE_STALE_MS,
   STALE_GRADING_MS,
   createRoomState,
   isLegacyBotRoom,
@@ -81,6 +82,19 @@ function findReusableRoomByUser(userId: string) {
 
 function saveRoom(roomId: string, state: MatchRoomState) {
   getMemoryStore().rooms.set(roomId, state);
+}
+
+function isHumanQueueUser(userId: string): boolean {
+  return Boolean(userId) && !userId.startsWith("bot_");
+}
+
+function purgeStaleQueue(now = Date.now()) {
+  const store = getMemoryStore();
+  for (const [userId, entry] of store.queue) {
+    if (!isHumanQueueUser(userId) || now - entry.lastSeenAt > QUEUE_STALE_MS) {
+      store.queue.delete(userId);
+    }
+  }
 }
 
 function createRoom(roomId: string, playerAId: string, playerBId: string, isBotB: boolean, chaosSeed: string) {
@@ -243,39 +257,53 @@ async function runJudge(roomId: string, state: MatchRoomState) {
 
 export async function memoryEnqueue(userId: string) {
   const store = getMemoryStore();
+  purgeStaleQueue();
   const existing = findReusableRoomByUser(userId);
   if (existing) return matchedPayload(existing.id, existing.state, userId);
 
   store.queue.delete(userId);
   const previewSeed = pickChaosSeed();
-  store.queue.set(userId, { userId, joinedAt: Date.now(), previewSeed });
+  const now = Date.now();
+  store.queue.set(userId, { userId, joinedAt: now, lastSeenAt: now, previewSeed });
 
-  const queued = [...store.queue.values()].sort((a, b) => a.joinedAt - b.joinedAt);
+  const queued = [...store.queue.values()]
+    .filter((entry) => isHumanQueueUser(entry.userId))
+    .sort((a, b) => a.joinedAt - b.joinedAt);
   if (queued.length >= 2) {
     const [a, b] = queued.slice(0, 2);
-    store.queue.delete(a.userId);
-    store.queue.delete(b.userId);
-    const roomId = genRoomId();
-    const chaosSeed = pickChaosSeed();
-    const state = createRoom(roomId, a.userId, b.userId, false, chaosSeed);
-    pushEvent(roomId, matchedPayload(roomId, state, a.userId));
-    pushEvent(roomId, matchedPayload(roomId, state, b.userId));
-    return matchedPayload(roomId, state, userId);
+    if (a.userId !== b.userId) {
+      store.queue.delete(a.userId);
+      store.queue.delete(b.userId);
+      const roomId = genRoomId();
+      const chaosSeed = pickChaosSeed();
+      const state = createRoom(roomId, a.userId, b.userId, false, chaosSeed);
+      pushEvent(roomId, matchedPayload(roomId, state, a.userId));
+      pushEvent(roomId, matchedPayload(roomId, state, b.userId));
+      return matchedPayload(roomId, state, userId);
+    }
   }
 
   return { type: "queued", queueSize: queued.length, previewSeed };
 }
 
 export async function memoryQueueStatus(userId: string) {
+  purgeStaleQueue();
   const roomRow = findReusableRoomByUser(userId);
   if (roomRow) return matchedPayload(roomRow.id, roomRow.state, userId);
 
   const inQueue = getMemoryStore().queue.get(userId);
   if (inQueue) {
-    return { type: "queued", queueSize: getMemoryStore().queue.size };
+    inQueue.lastSeenAt = Date.now();
+    const queueSize = [...getMemoryStore().queue.values()].filter((entry) => isHumanQueueUser(entry.userId)).length;
+    return { type: "queued", queueSize };
   }
 
   return { type: "idle" };
+}
+
+export async function memoryDequeue(userId: string) {
+  getMemoryStore().queue.delete(userId);
+  return { ok: true };
 }
 
 export async function memorySync(roomId: string, userId: string, since: number) {
