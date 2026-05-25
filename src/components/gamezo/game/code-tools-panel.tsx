@@ -57,7 +57,8 @@ export function CodeToolsPanel({
   const [editValue, setEditValue] = useState(() => valueForTab("HTML", htmlSource, assets));
 
   useEffect(() => {
-    setEditValue(valueForTab(tab, htmlSource, assets));
+    const timer = setTimeout(() => setEditValue(valueForTab(tab, htmlSource, assets)), 0);
+    return () => clearTimeout(timer);
   }, [tab, htmlSource, assets]);
 
   function handleEdit(next: string) {

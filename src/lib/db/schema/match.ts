@@ -5,6 +5,7 @@ export const matchQueue = pgTable(
   {
     userId: varchar("user_id", { length: 128 }).primaryKey(),
     joinedAt: timestamp("joined_at").notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
     previewSeed: text("preview_seed").notNull(),
   },
   (t) => ({ joinedIdx: index("match_queue_joined_idx").on(t.joinedAt) }),

@@ -32,6 +32,7 @@ export function GamezoGamePage() {
   const navigate = useSafeNavigate();
   const { roomId, userId, yourSlot, hydrated } = useMatchSession();
   const aiChatRef = useRef<HTMLDivElement>(null);
+  const cameraFallbackTriggeredRef = useRef(false);
 
   const [chaosSeed, setChaosSeed] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -55,12 +56,15 @@ export function GamezoGamePage() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const seed = getSessionValue("gamezo_chaosSeed", pickChaosSeed());
-    setChaosSeed(seed);
-    setPrompt(seed);
-    setAiMessages([
-      { role: "system", text: `Chaos seed: "${seed}". Lock your prompt, then ask the AI builder to generate a playable one-file game.` },
-    ]);
+    const timer = setTimeout(() => {
+      const seed = getSessionValue("gamezo_chaosSeed", pickChaosSeed());
+      setChaosSeed(seed);
+      setPrompt(seed);
+      setAiMessages([
+        { role: "system", text: `Chaos seed: "${seed}". Lock your prompt, then ask the AI builder to generate a playable one-file game.` },
+      ]);
+    }, 0);
+    return () => clearTimeout(timer);
   }, [hydrated]);
 
   const { attachStream, getStream, hasCamera, hasMic, micEnabled, toggleMic, error: cameraError, requesting: cameraRequesting, requestCamera } = useWebcam();
@@ -171,6 +175,21 @@ export function GamezoGamePage() {
     const timer = setTimeout(() => send({ type: "join-room", userId, roomId }), 300);
     return () => clearTimeout(timer);
   }, [hydrated, roomId, send, userId, navigate]);
+
+  useEffect(() => {
+    if (!hydrated || !roomId || !userId || hasRemoteStream || cameraFallbackTriggeredRef.current) return;
+
+    const timer = setTimeout(() => {
+      if (hasRemoteStream || cameraFallbackTriggeredRef.current) return;
+      cameraFallbackTriggeredRef.current = true;
+      send({ type: "find-new", userId, roomId });
+      clearMatchSession();
+      toast.message("Opponent camera did not connect. Finding another match…");
+      navigate("/matchmaking");
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [hydrated, roomId, userId, hasRemoteStream, send, navigate]);
 
   useEffect(() => {
     if (phase !== "BUILD_PHASE") return;

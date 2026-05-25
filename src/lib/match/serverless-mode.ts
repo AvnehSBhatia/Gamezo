@@ -1,5 +1,5 @@
 /** Postgres-backed polling (optional — only when DATABASE_URL is set on Vercel). */
-export function usePostgresMatchBackend(): boolean {
+export function usesPostgresMatchBackend(): boolean {
   if (process.env.GAME_SERVER_HTTP) return false;
   if (process.env.USE_SERVERLESS_MATCH === "1") return Boolean(process.env.DATABASE_URL);
   if (process.env.VERCEL && process.env.DATABASE_URL) return true;
@@ -7,31 +7,31 @@ export function usePostgresMatchBackend(): boolean {
 }
 
 /** In-memory polling — default on Vercel with zero extra services. */
-export function useMemoryMatchBackend(): boolean {
+export function usesMemoryMatchBackend(): boolean {
   if (process.env.GAME_SERVER_HTTP) return false;
-  if (usePostgresMatchBackend()) return false;
+  if (usesPostgresMatchBackend()) return false;
   if (process.env.VERCEL || process.env.VERCEL_URL) return true;
   if (process.env.USE_MEMORY_MATCH === "1") return true;
   return false;
 }
 
-export function usePollingMatchBackend(): boolean {
-  return usePostgresMatchBackend() || useMemoryMatchBackend();
+export function usesPollingMatchBackend(): boolean {
+  return usesPostgresMatchBackend() || usesMemoryMatchBackend();
 }
 
 export function matchTransportMode(): "websocket" | "polling" {
-  return usePollingMatchBackend() ? "polling" : "websocket";
+  return usesPollingMatchBackend() ? "polling" : "websocket";
 }
 
-/** @deprecated use usePollingMatchBackend */
-export function useServerlessMatchBackend(): boolean {
-  return usePollingMatchBackend();
+/** @deprecated use usesPollingMatchBackend */
+export function usesServerlessMatchBackend(): boolean {
+  return usesPollingMatchBackend();
 }
 
 export function matchBackendMode(): "websocket" | "memory" | "postgres" {
-  if (process.env.GAME_SERVER_HTTP || (!usePollingMatchBackend() && !process.env.VERCEL)) {
+  if (process.env.GAME_SERVER_HTTP || (!usesPollingMatchBackend() && !process.env.VERCEL)) {
     return "websocket";
   }
-  if (usePostgresMatchBackend()) return "postgres";
+  if (usesPostgresMatchBackend()) return "postgres";
   return "memory";
 }

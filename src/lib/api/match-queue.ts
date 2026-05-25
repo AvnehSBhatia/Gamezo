@@ -40,3 +40,11 @@ export async function pollMatchStatus(userId: string): Promise<QueueResponse> {
   if (!res.ok) throw new Error(await readQueueError(res));
   return res.json() as Promise<QueueResponse>;
 }
+
+export async function leaveMatchQueue(userId: string): Promise<void> {
+  const res = await fetch(`/api/match/queue?userId=${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(await readQueueError(res));
+}

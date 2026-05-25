@@ -14,10 +14,13 @@ export function useMatchSession() {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setRoomId(getSessionValue("gamezo_roomId"));
-    setUserId(getOrCreateUserId());
-    setYourSlot(getYourSlot());
-    setHydrated(true);
+    const timer = setTimeout(() => {
+      setRoomId(getSessionValue("gamezo_roomId"));
+      setUserId(getOrCreateUserId());
+      setYourSlot(getYourSlot());
+      setHydrated(true);
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   return { roomId, userId, yourSlot, hydrated };

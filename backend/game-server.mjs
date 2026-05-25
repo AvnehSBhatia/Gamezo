@@ -10,6 +10,7 @@ const PORT = parseInt(process.env.PORT ?? process.env.GAME_SERVER_PORT ?? "3001"
 const BUILD_MS = 60 * 1000;
 const DEMO_MS = 30 * 1000;
 const WAITING_PROMPTS_TIMEOUT_MS = 60 * 1000;
+const QUEUE_STALE_MS = 15 * 1000;
 const MAX_HTML_BYTES = 256 * 1024;
 
 function trimTrailingSlash(value) {
@@ -21,7 +22,7 @@ const JUDGE_URL =
   process.env.JUDGE_URL ??
   (appBase ? `${trimTrailingSlash(appBase)}/api/ai-judge` : "http://127.0.0.1:3000/api/ai-judge");
 
-/** @type {Map<string, { ws: import('ws').WebSocket, userId: string }>} */
+/** @type {Map<string, { ws: import('ws').WebSocket | null, userId: string, joinedAt: number, lastSeenAt: number }>} */
 const queue = new Map();
 
 /** @type {Map<string, object>} */
@@ -122,6 +123,26 @@ function removeFromQueue(userId) {
   queue.delete(userId);
 }
 
+function isHumanQueueUser(userId) {
+  return Boolean(userId) && !userId.startsWith("bot_");
+}
+
+function purgeStaleQueue(now = Date.now()) {
+  for (const [userId, entry] of queue) {
+    const socketLive = entry.ws?.readyState === 1;
+    if (!isHumanQueueUser(userId) || (!socketLive && now - entry.lastSeenAt > QUEUE_STALE_MS)) {
+      queue.delete(userId);
+    }
+  }
+}
+
+function activeQueueEntries() {
+  purgeStaleQueue();
+  return [...queue.values()]
+    .filter((entry) => isHumanQueueUser(entry.userId))
+    .sort((a, b) => a.joinedAt - b.joinedAt);
+}
+
 function removeQueueByWs(ws) {
   for (const [userId, entry] of queue) {
     if (entry.ws === ws) removeFromQueue(userId);
@@ -151,6 +172,7 @@ function notifyMatched(room) {
 }
 
 function enqueueUser(userId, ws = null) {
+  purgeStaleQueue();
   const existingRoomId = userRoom.get(userId);
   if (existingRoomId) {
     const room = rooms.get(existingRoomId);
@@ -158,7 +180,8 @@ function enqueueUser(userId, ws = null) {
   }
 
   removeFromQueue(userId);
-  queue.set(userId, { ws, userId });
+  const now = Date.now();
+  queue.set(userId, { ws, userId, joinedAt: now, lastSeenAt: now });
   const previewSeed = pickChaosSeed();
 
   if (tryPairFromQueue()) {
@@ -166,14 +189,15 @@ function enqueueUser(userId, ws = null) {
     if (room) return buildMatchedPayload(room, userId);
   }
 
-  return { type: "queued", queueSize: queue.size, previewSeed };
+  return { type: "queued", queueSize: activeQueueEntries().length, previewSeed };
 }
 
 function tryPairFromQueue() {
-  const entries = [...queue.values()];
+  const entries = activeQueueEntries();
   if (entries.length < 2) return false;
 
   const [a, b] = entries.slice(0, 2);
+  if (a.userId === b.userId) return false;
   removeFromQueue(a.userId);
   removeFromQueue(b.userId);
 
@@ -384,6 +408,12 @@ function handleGameMessage(ws, msg) {
   if (type === "enqueue") {
     const result = enqueueUser(userId, ws);
     send(ws, result);
+    return;
+  }
+
+  if (type === "dequeue" || type === "leave-queue") {
+    removeFromQueue(userId);
+    send(ws, { type: "dequeued" });
     return;
   }
 
@@ -645,6 +675,7 @@ function handleHttp(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/queue/status") {
+    purgeStaleQueue();
     const userId = url.searchParams.get("userId") ?? "";
     if (!userId) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -665,12 +696,27 @@ function handleHttp(req, res) {
       return;
     }
     if (queue.has(userId)) {
+      const entry = queue.get(userId);
+      if (entry) entry.lastSeenAt = Date.now();
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ type: "queued", queueSize: queue.size }));
+      res.end(JSON.stringify({ type: "queued", queueSize: activeQueueEntries().length }));
       return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ type: "idle" }));
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/queue") {
+    const userId = url.searchParams.get("userId") ?? "";
+    if (!userId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "userId required" }));
+      return;
+    }
+    removeFromQueue(userId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
     return;
   }
 
